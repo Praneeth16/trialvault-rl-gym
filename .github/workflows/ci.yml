@@ -27,6 +27,18 @@ jobs:
       - name: Harbor static lint (with root-agent rule)
         run: uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-consent-withdrawal
 
+  web-build:
+    name: Workbench UI Type-Check & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install & build Vercel workbench
+        working-directory: web
+        run: npm install --no-audit --no-fund && npm run build
+
   harbor-docker-oracle:
     name: Dockerized Harbor Separate-Verifier Oracle (nop=0.0, sol1=1.0, sol2=1.0)
     runs-on: ubuntu-latest

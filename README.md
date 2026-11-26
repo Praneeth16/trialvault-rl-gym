@@ -139,4 +139,16 @@ uvx --python 3.12 harbor run -p tasks/trialvault-consent-withdrawal -a oracle --
 # 5. Reproduce headless multi-model calibration locally
 uv run --python 3.12 python scripts/calibrate.py \
   --harness claude --model sonnet --label claude-sonnet-5 --runs 1 --timeout-sec 900 --eval-runs 3
+
+# 6. Run the interactive TrialVault Workbench UI locally (deployable to Vercel via vercel.json)
+cd web && npm install && npm run dev
 ```
+
+## Interactive Workbench UI (`web/`)
+
+An interactive React + TypeScript workbench lives under [`web/`](web/) (configured for one-click Vercel deployment via [`vercel.json`](vercel.json)) and stays decoupled from `tasks/trialvault-consent-withdrawal/`:
+
+- **Simulator**: Step through `POST /withdrawal-requests`, async worker convergence, clock advancement, FDA 2008 pre-vs-post withdrawal central-lab webhooks, and OS-level blob fault recovery across all stores.
+- **Calibration**: Inspect per-check RewardKit reasoning across all 28 checks and live model runs synced from `benchmarking-runs/`.
+- **Mutants**: Browse all 10 real unified diffs from `tests/mutants/` and the exact targeted checks each mutant triggers.
+

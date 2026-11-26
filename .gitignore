@@ -6,6 +6,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .DS_Store
+web/node_modules/
+web/dist/
+web/package-lock.json
+web/pnpm-workspace.yaml
+web/tsconfig.tsbuildinfo
 
 # Ephemeral TrialVault runtime data
 data/
