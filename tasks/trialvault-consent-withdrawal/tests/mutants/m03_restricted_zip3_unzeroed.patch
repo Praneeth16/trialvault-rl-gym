@@ -1,0 +1,11 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -89,7 +89,7 @@
+     if len(digits) < 3:
+         return "000"
+     zip3 = digits[:3]
+-    return "000" if zip3 in RESTRICTED_ZIP3 else zip3
++    return zip3
+ 
+ 
+ def generalize_age_and_dob(age: int | None, dob: str | None) -> tuple[int | None, str | None, str | None]:

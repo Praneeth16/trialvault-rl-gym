@@ -1,0 +1,15 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -247,12 +247,6 @@
+         if subj["site_id"] != site_id:
+             raise PermissionError("cross_site_access")
+ 
+-        if int(subj["regulatory_hold"]) == 1:
+-            return 409, {
+-                "error": "blocked_regulatory_hold",
+-                "status": "blocked_regulatory_hold",
+-                "detail": subj["hold_reason"] or "Subject is under an active FDA regulatory hold",
+-            }
+ 
+         request_id = f"wd-{uuid.uuid4().hex[:12]}"
+         anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}"

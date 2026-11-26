@@ -1,0 +1,40 @@
+schema_version = "1.4"
+artifacts = ["/app"]
+
+[task]
+name = "praneeth16/trialvault-consent-withdrawal"
+description = "Implement HIPAA Safe Harbor consent withdrawal across a 5-store clinical trial EDC without breaking FDA 21 CFR Part 11 audit chains or safety endpoints."
+authors = [{ name = "Praneeth Paikray", email = "paiky1995@gmail.com" }]
+keywords = [
+    "hls",
+    "healthcare",
+    "clinical-trials",
+    "hipaa",
+    "21-cfr-part-11",
+    "backend",
+    "distributed-systems",
+]
+
+[metadata]
+category = "healthcare-life-sciences"
+difficulty = "hard"
+difficulty_explanation = "Combines 6 interacting brownfield patterns: 5-store HIPAA Safe Harbor de-identification (incl. restricted ZIP3 and >89 age bucketing), FDA 21 CFR Part 11 audit-chain and safety-summary preservation, async worker convergence, late HL7 webhook and outbox replay suppression, transient fault recovery, and multi-site tenant/idempotency/regulatory-hold guards."
+
+[metadata.harbor.lint]
+extend-select = ["root-agent"]
+
+[agent]
+timeout_sec = 1800.0
+user = "agent"
+
+[environment]
+network_mode = "no-network"
+cpus = 2
+memory_mb = 4096
+storage_mb = 8192
+workdir = "/app"
+
+[verifier]
+environment_mode = "separate"
+network_mode = "no-network"
+timeout_sec = 300.0

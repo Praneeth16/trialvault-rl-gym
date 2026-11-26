@@ -1,0 +1,84 @@
+name: TrialVault RL Gym CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-and-mutants:
+    name: Ruff, Harbor Lint, Boundary Scores & 10-Mutant Kill Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --python 3.12 --no-install-project
+      - name: Ruff lint
+        run: uv run --python 3.12 ruff check .
+      - name: Starter baseline EDC tests
+        run: |
+          PYTHONPATH=tasks/trialvault-consent-withdrawal/environment/workspace \
+            uv run --python 3.12 pytest -v tasks/trialvault-consent-withdrawal/environment/workspace/tests/test_baseline_edc.py
+      - name: Verifier boundary & 10-mutant kill suite
+        run: uv run --python 3.12 pytest -v
+      - name: Harbor static lint (with root-agent rule)
+        run: uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-consent-withdrawal
+
+  harbor-docker-oracle:
+    name: Dockerized Harbor Separate-Verifier Oracle (nop=0.0, sol1=1.0, sol2=1.0)
+    runs-on: ubuntu-latest
+    needs: lint-and-mutants
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Docker is ready
+        run: docker info --format '{{.ServerVersion}}'
+      - name: Harbor NOP agent (must score 0.0)
+        run: |
+          uvx --python 3.12 harbor run \
+            -p tasks/trialvault-consent-withdrawal \
+            -a nop \
+            --jobs-dir jobs/nop
+          python3 -c '
+          import json, glob
+          files = glob.glob("jobs/nop/**/reward.json", recursive=True)
+          assert files, "No reward.json found for nop"
+          data = json.loads(open(files[0]).read())
+          print("NOP reward.json:", data)
+          assert data["reward"] == 0.0, f"Expected 0.0, got {data}"
+          '
+      - name: Harbor Oracle SOLUTION=1 (must score 1.0)
+        run: |
+          uvx --python 3.12 harbor run \
+            -p tasks/trialvault-consent-withdrawal \
+            -a oracle \
+            --ae SOLUTION=1 \
+            --jobs-dir jobs/sol1
+          python3 -c '
+          import json, glob
+          files = glob.glob("jobs/sol1/**/reward.json", recursive=True)
+          assert files, "No reward.json found for sol1"
+          data = json.loads(open(files[0]).read())
+          print("SOLUTION=1 reward.json:", data)
+          assert data["reward"] == 1.0, f"Expected 1.0, got {data}"
+          '
+      - name: Harbor Oracle SOLUTION=2 (must score 1.0)
+        run: |
+          uvx --python 3.12 harbor run \
+            -p tasks/trialvault-consent-withdrawal \
+            -a oracle \
+            --ae SOLUTION=2 \
+            --jobs-dir jobs/sol2
+          python3 -c '
+          import json, glob
+          files = glob.glob("jobs/sol2/**/reward.json", recursive=True)
+          assert files, "No reward.json found for sol2"
+          data = json.loads(open(files[0]).read())
+          print("SOLUTION=2 reward.json:", data)
+          assert data["reward"] == 1.0, f"Expected 1.0, got {data}"
+          '

@@ -1,0 +1,11 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -93,8 +93,6 @@
+ 
+ 
+ def generalize_age_and_dob(age: int | None, dob: str | None) -> tuple[int | None, str | None, str | None]:
+-    if age is not None and age > 89:
+-        return None, "90+", None
+     year_only = dob[:4] if dob and len(dob) >= 4 else None
+     bucket = str(age) if age is not None else None
+     return age, bucket, year_only

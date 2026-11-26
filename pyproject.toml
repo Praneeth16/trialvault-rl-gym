@@ -1,0 +1,33 @@
+[project]
+name = "trialvault-rl-gym"
+version = "0.1.0"
+description = "Harbor + RewardKit RLVR environment for HIPAA Safe Harbor clinical trial consent withdrawal and FDA 21 CFR Part 11 integrity."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "fastapi==0.165.0",
+    "uvicorn==0.54.0",
+    "pydantic==2.14.3",
+    "httpx==0.28.1",
+    "harbor-rewardkit==0.2.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "ruff>=0.14.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["trialvault"]
+
+[tool.pytest.ini_options]
+testpaths = ["tasks/trialvault-consent-withdrawal/tests/unit"]

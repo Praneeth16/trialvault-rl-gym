@@ -1,0 +1,19 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -516,14 +516,8 @@
+                     ),
+                 )
+             for a in aes:
+-                conn.execute(
+-                    "UPDATE adverse_events SET onset_date = NULL, reporter_notes = ?, payload_json = ? WHERE ae_id = ?",
+-                    (
+-                        redact_text(a["reporter_notes"], tokens),
+-                        json.dumps(redact_json_value(json.loads(a["payload_json"]), tokens, anon_ref), sort_keys=True),
+-                        a["ae_id"],
+-                    ),
+-                )
++                conn.execute("DELETE FROM medical_coding_queue WHERE ae_id = ?", (a["ae_id"],))
++                conn.execute("DELETE FROM adverse_events WHERE ae_id = ?", (a["ae_id"],))
+             for q in queries:
+                 conn.execute(
+                     "UPDATE data_queries SET query_text = ?, response_text = ? WHERE query_id = ?",

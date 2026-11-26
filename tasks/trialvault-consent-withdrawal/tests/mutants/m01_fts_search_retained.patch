@@ -1,0 +1,11 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -439,7 +439,7 @@
+ 
+     try:
+         # 1. SQLite FTS5 Search Index
+-        SearchIndex(paths.search_db).delete_subject(orig_subject_id)
++        _ = SearchIndex(paths.search_db)
+ 
+         # 2. Projection Cache
+         cache = ProjectionCache(paths.cache_file)

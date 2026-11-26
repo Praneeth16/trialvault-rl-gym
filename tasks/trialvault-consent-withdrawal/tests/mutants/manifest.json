@@ -1,0 +1,62 @@
+[
+  {
+    "id": "m01_fts_search_retained",
+    "patch": "m01_fts_search_retained.patch",
+    "description": "Omits FTS5 search index deletion during withdrawal",
+    "must_fail_checks": ["fts5_search_index_clean"]
+  },
+  {
+    "id": "m02_cache_projection_retained",
+    "patch": "m02_cache_projection_retained.patch",
+    "description": "Omits subject/MRN projection cache eviction",
+    "must_fail_checks": ["projection_cache_clean"]
+  },
+  {
+    "id": "m03_restricted_zip3_unzeroed",
+    "patch": "m03_restricted_zip3_unzeroed.patch",
+    "description": "Truncates ZIP to 3 digits without zeroing restricted <=20k prefixes (036, 893)",
+    "must_fail_checks": ["safe_harbor_zip3_and_restricted_zeroed"]
+  },
+  {
+    "id": "m04_age90_birthyear_leak",
+    "patch": "m04_age90_birthyear_leak.patch",
+    "description": "Keeps exact birth year and age_at_enrollment for subjects older than 89",
+    "must_fail_checks": ["safe_harbor_age_over_89_and_dates"]
+  },
+  {
+    "id": "m05_cascade_delete_safety_rows",
+    "patch": "m05_cascade_delete_safety_rows.patch",
+    "description": "Deletes adverse event clinical rows instead of retaining de-identified records",
+    "must_fail_checks": ["safety_summary_arm_totals_preserved", "clinical_rows_retained_and_rekeyed"]
+  },
+  {
+    "id": "m06_audit_chain_broken",
+    "patch": "m06_audit_chain_broken.patch",
+    "description": "Mutates an existing 21 CFR Part 11 audit_log row, breaking the SHA-256 hash chain",
+    "must_fail_checks": ["part11_audit_chain_valid"]
+  },
+  {
+    "id": "m07_premature_completed_status",
+    "patch": "m07_premature_completed_status.patch",
+    "description": "Marks withdrawal request completed synchronously on POST before worker converges",
+    "must_fail_checks": ["post_returns_202_pending", "not_completed_before_convergence"]
+  },
+  {
+    "id": "m08_late_hl7_webhook_reintroduces_phi",
+    "patch": "m08_late_hl7_webhook_reintroduces_phi.patch",
+    "description": "Omits suppression check on late central-lab HL7 webhooks",
+    "must_fail_checks": ["late_hl7_webhook_suppressed"]
+  },
+  {
+    "id": "m09_cross_site_tenant_leak",
+    "patch": "m09_cross_site_tenant_leak.patch",
+    "description": "Omits site tenant ownership check on GET /v1/withdrawal-requests/{request_id}",
+    "must_fail_checks": ["cross_site_and_scope_isolation"]
+  },
+  {
+    "id": "m10_regulatory_hold_ignored",
+    "patch": "m10_regulatory_hold_ignored.patch",
+    "description": "Ignores active FDA regulatory hold and accepts withdrawal instead of returning 409",
+    "must_fail_checks": ["regulatory_hold_blocks_409_no_mutation"]
+  }
+]

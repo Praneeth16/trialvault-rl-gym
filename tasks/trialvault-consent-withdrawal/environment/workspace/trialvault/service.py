@@ -1,0 +1,787 @@
+"""Core TrialVault clinical EDC domain operations."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+import uuid
+from typing import Any
+
+from trialvault.audit import append_audit_event
+from trialvault.blobs import BlobStore
+from trialvault.cache import ProjectionCache
+from trialvault.config import DataPaths
+from trialvault.db import connect_edc, utc_now_iso
+from trialvault.search import SearchIndex
+from trialvault.spool import SpoolStore
+
+
+def opaque_audit_ref(prefix: str, raw_id: str) -> str:
+    digest = hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}:{digest}"
+
+
+def enqueue_outbox(
+    conn: sqlite3.Connection,
+    *,
+    event_type: str,
+    aggregate_id: str,
+    site_id: str,
+    payload: dict[str, Any],
+) -> str:
+    event_id = f"evt-{uuid.uuid4().hex[:12]}"
+    conn.execute(
+        """
+        INSERT INTO outbox_events (
+            event_id, event_type, aggregate_id, site_id, payload_json, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (event_id, event_type, aggregate_id, site_id, json.dumps(payload, sort_keys=True), utc_now_iso()),
+    )
+    return event_id
+
+
+def schedule_delayed_job(
+    conn: sqlite3.Connection,
+    *,
+    job_type: str,
+    subject_id: str,
+    site_id: str,
+    payload: dict[str, Any],
+    run_after: str,
+) -> str:
+    job_id = f"job-{uuid.uuid4().hex[:12]}"
+    conn.execute(
+        """
+        INSERT INTO scheduled_jobs (
+            job_id, job_type, subject_id, site_id, payload_json, run_after, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)
+        """,
+        (job_id, job_type, subject_id, site_id, json.dumps(payload, sort_keys=True), run_after, utc_now_iso()),
+    )
+    return job_id
+
+
+def build_subject_search_text(row: dict[str, Any]) -> str:
+    parts = [
+        row.get("subject_id") or "",
+        row.get("mrn") or "",
+        row.get("full_name") or "",
+        row.get("email") or "",
+        row.get("phone") or "",
+        row.get("ssn") or "",
+        row.get("street_address") or "",
+        row.get("city") or "",
+        row.get("state") or "",
+        row.get("postal_code") or "",
+        row.get("device_serial") or "",
+        row.get("portal_url") or "",
+        row.get("emergency_contact_name") or "",
+        row.get("treatment_arm") or "",
+        row.get("investigator_name") or "",
+    ]
+    return " ".join(p for p in parts if p)
+
+
+def build_subject_projection(conn: sqlite3.Connection, subject_id: str) -> dict[str, Any] | None:
+    row = conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+    if row is None:
+        return None
+    subj = dict(row)
+    subj["visits"] = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM visits WHERE subject_id = ? ORDER BY visit_number ASC",
+            (subject_id,),
+        ).fetchall()
+    ]
+    subj["adverse_events"] = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM adverse_events WHERE subject_id = ? ORDER BY onset_study_day ASC",
+            (subject_id,),
+        ).fetchall()
+    ]
+    subj["lab_results"] = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM lab_results WHERE subject_id = ? ORDER BY study_day ASC",
+            (subject_id,),
+        ).fetchall()
+    ]
+    subj["data_queries"] = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM data_queries WHERE subject_id = ? ORDER BY created_at ASC",
+            (subject_id,),
+        ).fetchall()
+    ]
+    return subj
+
+
+def cache_subject_projection(
+    conn: sqlite3.Connection,
+    cache: ProjectionCache,
+    subject_id: str,
+) -> dict[str, Any] | None:
+    proj = build_subject_projection(conn, subject_id)
+    if proj is None:
+        return None
+    site_id = proj["site_id"]
+    cache.set(f"site:{site_id}:subject:{subject_id}:profile", proj)
+    cache.set(
+        f"site:{site_id}:subject:{subject_id}:timeline",
+        {
+            "subject_id": subject_id,
+            "full_name": proj.get("full_name"),
+            "mrn": proj.get("mrn"),
+            "visit_count": len(proj["visits"]),
+            "ae_count": len(proj["adverse_events"]),
+            "lab_count": len(proj["lab_results"]),
+        },
+    )
+    if proj.get("mrn"):
+        cache.set(
+            f"site:{site_id}:mrn:{proj['mrn']}",
+            {
+                "subject_id": subject_id,
+                "full_name": proj.get("full_name"),
+                "email": proj.get("email"),
+            },
+        )
+    return proj
+
+
+def enroll_subject(
+    paths: DataPaths,
+    *,
+    site_id: str,
+    trial_id: str,
+    actor: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    now = utc_now_iso()
+    subject_id = data.get("subject_id") or f"SUBJ-{uuid.uuid4().hex[:8].upper()}"
+    age = int(data["age_at_enrollment"])
+    age_bucket = "90+" if age > 89 else str(age)
+
+    with connect_edc(paths.edc_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO subjects (
+                subject_id, trial_id, site_id, mrn, full_name, email, phone, ssn,
+                dob, age_at_enrollment, age_bucket, street_address, city, state, postal_code,
+                device_serial, ip_address, portal_url, emergency_contact_name,
+                emergency_contact_phone, treatment_arm, randomization_date, status,
+                regulatory_hold, hold_reason, anon_subject_ref, household_group_id,
+                investigator_name, created_at, updated_at
+            ) VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?, ?, ?, 'active',
+                ?, ?, NULL, ?,
+                ?, ?, ?
+            )
+            """,
+            (
+                subject_id,
+                trial_id,
+                site_id,
+                data["mrn"],
+                data["full_name"],
+                data["email"],
+                data["phone"],
+                data["ssn"],
+                data["dob"],
+                age,
+                age_bucket,
+                data["street_address"],
+                data["city"],
+                data["state"],
+                data["postal_code"],
+                data["device_serial"],
+                data["ip_address"],
+                data["portal_url"],
+                data["emergency_contact_name"],
+                data["emergency_contact_phone"],
+                data["treatment_arm"],
+                data["randomization_date"],
+                1 if data.get("regulatory_hold") else 0,
+                data.get("hold_reason"),
+                data.get("household_group_id"),
+                data.get("investigator_name", "Dr. Hannah Lin"),
+                now,
+                now,
+            ),
+        )
+        append_audit_event(
+            conn,
+            site_id=site_id,
+            actor=actor,
+            action="SUBJECT_ENROLLED",
+            resource_type="subject",
+            resource_ref=opaque_audit_ref("subj", subject_id),
+            structural_payload={
+                "trial_id": trial_id,
+                "treatment_arm": data["treatment_arm"],
+                "regulatory_hold": bool(data.get("regulatory_hold")),
+            },
+            pii_subject_id=subject_id,
+            pii_detail={
+                "subject_id": subject_id,
+                "mrn": data["mrn"],
+                "full_name": data["full_name"],
+                "email": data["email"],
+                "phone": data["phone"],
+                "ssn": data["ssn"],
+                "dob": data["dob"],
+                "street_address": data["street_address"],
+            },
+        )
+        enqueue_outbox(
+            conn,
+            event_type="subject.enrolled",
+            aggregate_id=subject_id,
+            site_id=site_id,
+            payload={
+                "subject_id": subject_id,
+                "trial_id": trial_id,
+                "site_id": site_id,
+                "mrn": data["mrn"],
+                "full_name": data["full_name"],
+                "email": data["email"],
+            },
+        )
+        schedule_delayed_job(
+            conn,
+            job_type="epro.day30_followup",
+            subject_id=subject_id,
+            site_id=site_id,
+            payload={
+                "subject_id": subject_id,
+                "mrn": data["mrn"],
+                "full_name": data["full_name"],
+                "recipient": data["email"],
+                "phone": data["phone"],
+                "template": "day30_followup_diary",
+            },
+            run_after="2026-04-15T00:00:00+00:00",
+        )
+        conn.commit()
+        row = dict(conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone())
+
+    blobs = BlobStore(paths.blobs_dir)
+    blobs.put_json(
+        f"econsent/{site_id}/{subject_id}_signed.json",
+        payload={
+            "subject_id": subject_id,
+            "mrn": data["mrn"],
+            "full_name": data["full_name"],
+            "dob": data["dob"],
+            "email": data["email"],
+            "street_address": data["street_address"],
+            "signature_ip": data["ip_address"],
+            "signed_at": now,
+            "consent_version": "v3.2",
+        },
+        metadata={
+            "doc_type": "econsent",
+            "site_id": site_id,
+            "subject_id": subject_id,
+            "mrn": data["mrn"],
+            "patient_name": data["full_name"],
+            "email": data["email"],
+        },
+    )
+
+    ProjectionCache(paths.cache_file).delete(f"trial:{trial_id}:safety_summary")
+    return row
+
+
+def record_visit(
+    paths: DataPaths,
+    *,
+    site_id: str,
+    subject_id: str,
+    actor: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    visit_id = data.get("visit_id") or f"VIS-{uuid.uuid4().hex[:8].upper()}"
+    metadata_json = json.dumps(data.get("metadata", {}), sort_keys=True)
+    with connect_edc(paths.edc_db) as conn:
+        subj = conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+        if subj is None:
+            raise LookupError("subject_not_found")
+        if subj["site_id"] != site_id:
+            raise PermissionError("cross_site_access")
+        conn.execute(
+            """
+            INSERT INTO visits (
+                visit_id, subject_id, site_id, visit_number, visit_date,
+                days_from_randomization, systolic_bp, diastolic_bp, clinical_notes, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                visit_id,
+                subject_id,
+                site_id,
+                int(data["visit_number"]),
+                data["visit_date"],
+                int(data["days_from_randomization"]),
+                int(data["systolic_bp"]),
+                int(data["diastolic_bp"]),
+                data["clinical_notes"],
+                metadata_json,
+            ),
+        )
+        append_audit_event(
+            conn,
+            site_id=site_id,
+            actor=actor,
+            action="VISIT_RECORDED",
+            resource_type="visit",
+            resource_ref=opaque_audit_ref("visit", visit_id),
+            structural_payload={
+                "visit_number": int(data["visit_number"]),
+                "days_from_randomization": int(data["days_from_randomization"]),
+            },
+            pii_subject_id=subject_id,
+            pii_detail={"subject_id": subject_id, "visit_date": data["visit_date"], "notes": data["clinical_notes"]},
+        )
+        enqueue_outbox(
+            conn,
+            event_type="visit.recorded",
+            aggregate_id=subject_id,
+            site_id=site_id,
+            payload={
+                "visit_id": visit_id,
+                "subject_id": subject_id,
+                "mrn": subj["mrn"],
+                "clinical_notes": data["clinical_notes"],
+            },
+        )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM visits WHERE visit_id = ?", (visit_id,)).fetchone())
+
+
+def record_adverse_event(
+    paths: DataPaths,
+    *,
+    site_id: str,
+    subject_id: str,
+    actor: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    ae_id = data.get("ae_id") or f"AE-{uuid.uuid4().hex[:8].upper()}"
+    coding_id = f"COD-{uuid.uuid4().hex[:8].upper()}"
+    payload_json = json.dumps(data.get("payload", {}), sort_keys=True)
+    now = utc_now_iso()
+    with connect_edc(paths.edc_db) as conn:
+        subj = conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+        if subj is None:
+            raise LookupError("subject_not_found")
+        if subj["site_id"] != site_id:
+            raise PermissionError("cross_site_access")
+        conn.execute(
+            """
+            INSERT INTO adverse_events (
+                ae_id, subject_id, trial_id, site_id, meddra_term, ctcae_grade,
+                serious, onset_date, onset_study_day, relatedness, reporter_notes, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ae_id,
+                subject_id,
+                subj["trial_id"],
+                site_id,
+                data["meddra_term"],
+                int(data["ctcae_grade"]),
+                1 if data.get("serious") else 0,
+                data["onset_date"],
+                int(data["onset_study_day"]),
+                data["relatedness"],
+                data["reporter_notes"],
+                payload_json,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO medical_coding_queue (
+                coding_id, ae_id, subject_id, site_id, verbatim_term, coded_meddra_pt, coder_notes, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'coded', ?)
+            """,
+            (
+                coding_id,
+                ae_id,
+                subject_id,
+                site_id,
+                f"{data['meddra_term']} reported for {subj['full_name']} ({subj['mrn']})",
+                data["meddra_term"],
+                f"Coded from AE {ae_id} ({subj['email']}): {data['reporter_notes']}",
+                now,
+            ),
+        )
+        append_audit_event(
+            conn,
+            site_id=site_id,
+            actor=actor,
+            action="ADVERSE_EVENT_RECORDED",
+            resource_type="adverse_event",
+            resource_ref=opaque_audit_ref("ae", ae_id),
+            structural_payload={
+                "meddra_term": data["meddra_term"],
+                "ctcae_grade": int(data["ctcae_grade"]),
+                "serious": bool(data.get("serious")),
+            },
+            pii_subject_id=subject_id,
+            pii_detail={"subject_id": subject_id, "onset_date": data["onset_date"], "reporter_notes": data["reporter_notes"]},
+        )
+        enqueue_outbox(
+            conn,
+            event_type="ae.recorded",
+            aggregate_id=subject_id,
+            site_id=site_id,
+            payload={
+                "ae_id": ae_id,
+                "subject_id": subject_id,
+                "trial_id": subj["trial_id"],
+                "mrn": subj["mrn"],
+                "reporter_notes": data["reporter_notes"],
+            },
+        )
+        conn.commit()
+        row = dict(conn.execute("SELECT * FROM adverse_events WHERE ae_id = ?", (ae_id,)).fetchone())
+    ProjectionCache(paths.cache_file).delete(f"trial:{row['trial_id']}:safety_summary")
+    return row
+
+
+def schedule_epro_reminder(
+    paths: DataPaths,
+    *,
+    site_id: str,
+    subject_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    notif_id = data.get("notif_id") or f"EPRO-{uuid.uuid4().hex[:8].upper()}"
+    status = data.get("status", "pending")
+    sent_at = data.get("sent_at")
+    with connect_edc(paths.edc_db) as conn:
+        subj = conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+        if subj is None:
+            raise LookupError("subject_not_found")
+        if subj["site_id"] != site_id:
+            raise PermissionError("cross_site_access")
+        recipient = data.get("recipient") or subj["email"]
+        payload = data.get("payload") or {
+            "subject_id": subject_id,
+            "mrn": subj["mrn"],
+            "full_name": subj["full_name"],
+            "phone": subj["phone"],
+            "portal_url": subj["portal_url"],
+            "message": f"Reminder for {subj['full_name']}: complete your daily ePRO symptom diary.",
+        }
+        conn.execute(
+            """
+            INSERT INTO epro_notifications (
+                notif_id, subject_id, site_id, channel, recipient, template,
+                payload_json, status, scheduled_for, sent_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notif_id,
+                subject_id,
+                site_id,
+                data.get("channel", "email"),
+                recipient,
+                data.get("template", "daily_diary_reminder"),
+                json.dumps(payload, sort_keys=True),
+                status,
+                data.get("scheduled_for", utc_now_iso()),
+                sent_at,
+            ),
+        )
+        if status == "pending":
+            enqueue_outbox(
+                conn,
+                event_type="epro.scheduled",
+                aggregate_id=subject_id,
+                site_id=site_id,
+                payload={
+                    "notif_id": notif_id,
+                    "subject_id": subject_id,
+                    "mrn": subj["mrn"],
+                    "recipient": recipient,
+                    "full_name": subj["full_name"],
+                    "message": payload.get("message", ""),
+                },
+            )
+        conn.commit()
+        return dict(conn.execute("SELECT * FROM epro_notifications WHERE notif_id = ?", (notif_id,)).fetchone())
+
+
+def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """Ingest a central-lab HL7/FHIR biomarker report and archive to webhook_inbox."""
+    subject_id = payload.get("subject_id")
+    mrn = payload.get("mrn")
+    accession_no = payload["accession_no"]
+    site_id = payload["site_id"]
+    now = utc_now_iso()
+
+    with connect_edc(paths.edc_db) as conn:
+        dup = conn.execute(
+            "SELECT status FROM webhook_inbox WHERE accession_no = ?", (accession_no,)
+        ).fetchone()
+        if dup is not None:
+            return 200, {"status": "duplicate", "accession_no": accession_no}
+
+        subj = None
+        if subject_id:
+            subj = conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+        if subj is None and mrn:
+            subj = conn.execute("SELECT * FROM subjects WHERE mrn = ?", (mrn,)).fetchone()
+        if subj is None:
+            raise LookupError("subject_not_found")
+
+        resolved_subject_id = subj["subject_id"]
+        trial_id = subj["trial_id"]
+        blob_key = f"labs/{site_id}/{accession_no}.json"
+        lab_id = f"LAB-{uuid.uuid4().hex[:8].upper()}"
+
+        demo = payload.get("patient_demographics", {})
+        raw_hl7 = {
+            "message_type": "ORU^R01",
+            "accession_no": accession_no,
+            "PID": {
+                "subject_id": resolved_subject_id,
+                "mrn": mrn or subj["mrn"],
+                "patient_name": demo.get("full_name", subj["full_name"]),
+                "dob": demo.get("dob", subj["dob"]),
+                "email": demo.get("email", subj["email"]),
+                "phone": demo.get("phone", subj["phone"]),
+                "ssn": demo.get("ssn", subj["ssn"]),
+                "street_address": demo.get("street_address", subj["street_address"]),
+                "postal_code": demo.get("postal_code", subj["postal_code"]),
+            },
+            "OBX": {
+                "analyte": payload["analyte"],
+                "value_num": float(payload["value_num"]),
+                "unit": payload["unit"],
+                "reference_flag": payload.get("reference_flag", "NORMAL"),
+                "collected_date": payload["collected_date"],
+                "study_day": int(payload["study_day"]),
+            },
+        }
+
+        conn.execute(
+            """
+            INSERT INTO webhook_inbox (
+                webhook_id, source, accession_no, subject_id, mrn, raw_payload_json, received_at, status
+            ) VALUES (?, 'central_lab', ?, ?, ?, ?, ?, 'ingested')
+            """,
+            (
+                f"wh-{uuid.uuid4().hex[:12]}",
+                accession_no,
+                resolved_subject_id,
+                raw_hl7["PID"]["mrn"],
+                json.dumps(payload, sort_keys=True),
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO lab_results (
+                lab_id, subject_id, trial_id, site_id, accession_no, analyte,
+                value_num, unit, reference_flag, collected_date, study_day,
+                raw_hl7_json, blob_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                lab_id,
+                resolved_subject_id,
+                trial_id,
+                site_id,
+                accession_no,
+                payload["analyte"],
+                float(payload["value_num"]),
+                payload["unit"],
+                payload.get("reference_flag", "NORMAL"),
+                payload["collected_date"],
+                int(payload["study_day"]),
+                json.dumps(raw_hl7, sort_keys=True),
+                blob_key,
+            ),
+        )
+        append_audit_event(
+            conn,
+            site_id=site_id,
+            actor="central-lab-webhook",
+            action="LAB_RESULT_INGESTED",
+            resource_type="lab_result",
+            resource_ref=opaque_audit_ref("lab", accession_no),
+            structural_payload={
+                "analyte": payload["analyte"],
+                "study_day": int(payload["study_day"]),
+                "reference_flag": payload.get("reference_flag", "NORMAL"),
+            },
+            pii_subject_id=resolved_subject_id,
+            pii_detail={
+                "subject_id": resolved_subject_id,
+                "mrn": mrn or subj["mrn"],
+                "patient_name": raw_hl7["PID"]["patient_name"],
+                "collected_date": payload["collected_date"],
+            },
+        )
+        enqueue_outbox(
+            conn,
+            event_type="lab.received",
+            aggregate_id=resolved_subject_id,
+            site_id=site_id,
+            payload={
+                "lab_id": lab_id,
+                "subject_id": resolved_subject_id,
+                "trial_id": trial_id,
+                "mrn": mrn or subj["mrn"],
+                "accession_no": accession_no,
+                "analyte": payload["analyte"],
+                "patient_name": raw_hl7["PID"]["patient_name"],
+            },
+        )
+        conn.commit()
+
+    blobs = BlobStore(paths.blobs_dir)
+    blobs.put_json(
+        blob_key,
+        payload={
+            "accession_no": accession_no,
+            "subject_id": resolved_subject_id,
+            "mrn": raw_hl7["PID"]["mrn"],
+            "patient_name": raw_hl7["PID"]["patient_name"],
+            "dob": raw_hl7["PID"]["dob"],
+            "email": raw_hl7["PID"]["email"],
+            "phone": raw_hl7["PID"]["phone"],
+            "ssn": raw_hl7["PID"]["ssn"],
+            "street_address": raw_hl7["PID"]["street_address"],
+            "postal_code": raw_hl7["PID"]["postal_code"],
+            "collected_date": payload["collected_date"],
+            "study_day": int(payload["study_day"]),
+            "results": [
+                {
+                    "analyte": payload["analyte"],
+                    "value_num": float(payload["value_num"]),
+                    "unit": payload["unit"],
+                    "reference_flag": payload.get("reference_flag", "NORMAL"),
+                }
+            ],
+        },
+        metadata={
+            "doc_type": "central_lab",
+            "site_id": site_id,
+            "trial_id": trial_id,
+            "accession_no": accession_no,
+            "subject_id": resolved_subject_id,
+            "mrn": raw_hl7["PID"]["mrn"],
+            "patient_name": raw_hl7["PID"]["patient_name"],
+            "collected_date": payload["collected_date"],
+        },
+    )
+
+    ProjectionCache(paths.cache_file).delete(f"trial:{trial_id}:safety_summary")
+    return 201, {"status": "ingested", "lab_id": lab_id, "accession_no": accession_no, "blob_key": blob_key}
+
+
+def compute_safety_summary(paths: DataPaths, trial_id: str) -> dict[str, Any]:
+    cache = ProjectionCache(paths.cache_file)
+    cache_key = f"trial:{trial_id}:safety_summary"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    with connect_edc(paths.edc_db) as conn:
+        trial = conn.execute("SELECT trial_id, protocol_code FROM trials WHERE trial_id = ?", (trial_id,)).fetchone()
+        if trial is None:
+            raise LookupError("trial_not_found")
+
+        arm_rows = conn.execute(
+            """
+            SELECT treatment_arm, COUNT(*) AS cnt
+            FROM subjects
+            WHERE trial_id = ?
+            GROUP BY treatment_arm
+            ORDER BY treatment_arm ASC
+            """,
+            (trial_id,),
+        ).fetchall()
+        arm_breakdown = {r["treatment_arm"]: int(r["cnt"]) for r in arm_rows}
+        total_subjects = sum(arm_breakdown.values())
+
+        ae_stats = conn.execute(
+            """
+            SELECT COUNT(*) AS total_aes,
+                   COALESCE(SUM(CASE WHEN serious = 1 THEN 1 ELSE 0 END), 0) AS serious_aes,
+                   COALESCE(SUM(CASE WHEN ctcae_grade >= 3 THEN 1 ELSE 0 END), 0) AS grade3_plus_aes
+            FROM adverse_events
+            WHERE trial_id = ?
+            """,
+            (trial_id,),
+        ).fetchone()
+
+        lab_rows = conn.execute(
+            """
+            SELECT analyte, COUNT(*) AS cnt, ROUND(AVG(value_num), 4) AS mean_value
+            FROM lab_results
+            WHERE trial_id = ?
+            GROUP BY analyte
+            ORDER BY analyte ASC
+            """,
+            (trial_id,),
+        ).fetchall()
+        lab_summary = {
+            r["analyte"]: {"count": int(r["cnt"]), "mean": float(r["mean_value"])} for r in lab_rows
+        }
+
+    summary = {
+        "trial_id": trial_id,
+        "protocol_code": trial["protocol_code"],
+        "total_subjects": total_subjects,
+        "arm_breakdown": arm_breakdown,
+        "total_adverse_events": int(ae_stats["total_aes"]),
+        "serious_adverse_events": int(ae_stats["serious_aes"]),
+        "grade3_plus_adverse_events": int(ae_stats["grade3_plus_aes"]),
+        "lab_summary": lab_summary,
+    }
+    cache.set(cache_key, summary)
+    return summary
+
+
+def sync_subject_projections(paths: DataPaths, subject_id: str) -> None:
+    """Refresh FTS5 search index and projection cache for a subject."""
+    with connect_edc(paths.edc_db) as conn:
+        proj = cache_subject_projection(conn, ProjectionCache(paths.cache_file), subject_id)
+        if proj is None:
+            return
+        site_id = proj["site_id"]
+        search = SearchIndex(paths.search_db)
+        search.upsert_document(subject_id, site_id, "profile", build_subject_search_text(proj))
+        notes_text = " ".join(v["clinical_notes"] for v in proj["visits"])
+        if notes_text.strip():
+            search.upsert_document(subject_id, site_id, "visits", notes_text)
+        ae_text = " ".join(a["reporter_notes"] for a in proj["adverse_events"])
+        if ae_text.strip():
+            search.upsert_document(subject_id, site_id, "adverse_events", ae_text)
+        lab_text = " ".join(
+            f"{lb['accession_no']} {lb['analyte']} {lb['raw_hl7_json']}" for lb in proj["lab_results"]
+        )
+        if lab_text.strip():
+            search.upsert_document(subject_id, site_id, "labs", lab_text)
+        qry_text = " ".join(
+            f"{q['field_name']} {q['query_text']} {q.get('response_text') or ''}" for q in proj["data_queries"]
+        )
+        if qry_text.strip():
+            search.upsert_document(subject_id, site_id, "queries", qry_text)
+
+
+def flush_epro_to_spool(paths: DataPaths, payload: dict[str, Any]) -> None:
+    spool = SpoolStore(paths.outbound_queue, paths.dead_letters)
+    spool.append_outbound(payload)

@@ -1,0 +1,85 @@
+{
+  "task": "praneeth16/trialvault-consent-withdrawal",
+  "verifier_spec": {
+    "framework": "harbor-rewardkit==0.2.4",
+    "harbor_version": "0.26.0",
+    "criteria_count": 8,
+    "checks_count": 28,
+    "max_single_check_weight_pct": 5.0,
+    "fresh_seeded_runs_per_eval": 3,
+    "aggregation": "min across 3 fresh-seeded runs per check, weighted-mean across criteria"
+  },
+  "boundary_and_mutant_proofs": {
+    "starter_untouched": 0.0,
+    "oracle_solution_1_outbox": 1.0,
+    "oracle_solution_2_saga": 1.0,
+    "mutants_killed": "10/10",
+    "harbor_lint_root_agent": "pass (0 errors, 0 warnings)"
+  },
+  "verifier_audit_fixes": [
+    {
+      "check": "active_store_deid.blobs_and_metadata_clean",
+      "issue_found_in_calibration": "Rejected valid solutions that replaced the value of key 'subject_id' with anon_subject_ref instead of renaming the JSON key to 'anon_subject_ref'.",
+      "fix": "Accepted either 'anon_subject_ref' == ref or 'subject_id' == ref while preserving strict zero-PHI and numeric lab retention assertions."
+    },
+    {
+      "check": "async_convergence.epro_notifications_spool_and_dlq_sanitized",
+      "issue_found_in_calibration": "Required retaining exact status ['cancelled', 'sent'] on epro_notifications even after the docs were refactored to pure policy style.",
+      "fix": "Verified no pending notifications remain, recipient is NULL, zero PHI remains across DB/scheduled_jobs/spool/DLQ, and co-enrolled survivor delayed jobs still fire."
+    }
+  ],
+  "calibration_runs": [
+    {
+      "file": "claude-haiku-4.5_run1.json",
+      "harness": "claude-code-cli",
+      "model": "claude-haiku-4.5",
+      "verifier_stage": "v2_pre_audit",
+      "elapsed_sec": 600.03,
+      "exit_code": 124,
+      "reward": 0.87,
+      "passed_checks": "25/28",
+      "real_failures": [
+        "replay_and_late_webhooks.replayed_outbox_event_suppressed (leaked plaintext PHI in outbox_events on replay)"
+      ]
+    },
+    {
+      "file": "codex-gpt-6.2-sol_run1.json",
+      "harness": "codex-cli",
+      "model": "gpt-6.2-sol (high)",
+      "verifier_stage": "v2_pre_audit",
+      "elapsed_sec": 480.01,
+      "exit_code": 124,
+      "reward": 0.83,
+      "passed_checks": "24/28",
+      "real_failures": [
+        "failure_and_recovery.retry_after_fault_converges_cleanly",
+        "replay_and_late_webhooks.late_hl7_webhook_suppressed (FDA pre-withdrawal specimen boundary)"
+      ]
+    },
+    {
+      "file": "codex-gpt-6.2-sol-full_run1.json",
+      "harness": "codex-cli",
+      "model": "gpt-6.2-sol (high)",
+      "verifier_stage": "v2_pre_audit",
+      "elapsed_sec": 720.03,
+      "exit_code": 124,
+      "reward": 0.96,
+      "passed_checks": "27/28",
+      "real_failures": [
+        "Only failed blobs_and_metadata_clean due to key-name coupling (fixed in verifier audit)"
+      ]
+    },
+    {
+      "file": "claude-sonnet-5_run1.json",
+      "harness": "claude-code-cli",
+      "model": "claude-sonnet-5",
+      "verifier_stage": "v2_post_audit",
+      "elapsed_sec": 669.28,
+      "exit_code": 0,
+      "reward": 1.0,
+      "passed_checks": "28/28",
+      "real_failures": []
+    }
+  ],
+  "difficulty_takeaway": "Audited v2 proves zero fake difficulty and 100% design-independence (independent agent scored 1.000 without seeing tests/solution). Because the portable zero-daemon Python/SQLite stack fits in ~15k context tokens, late-2026 frontier models score 83-100%; pushing frontier single-pass scores below 30% requires scaling to multi-service Docker Compose (Postgres, Redis, OpenSearch, MinIO, Redpanda, Mailpit) with cross-service async races."
+}

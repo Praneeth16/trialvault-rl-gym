@@ -1,0 +1,14 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -263,9 +263,9 @@
+             INSERT INTO withdrawal_requests (
+                 request_id, site_id, trial_id, subject_id_hash, anon_subject_ref,
+                 effective_date, status, reason, requested_by, created_at, completed_at, error
+-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL)
++            ) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, NULL)
+             """,
+-            (request_id, site_id, trial_id, subj_hash, anon_ref, eff_date, reason, requested_by, now),
++            (request_id, site_id, trial_id, subj_hash, anon_ref, eff_date, reason, requested_by, now, now),
+         )
+         if idempotency_key:
+             conn.execute(

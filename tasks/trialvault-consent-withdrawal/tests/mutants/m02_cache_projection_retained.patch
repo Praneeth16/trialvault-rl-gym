@@ -1,0 +1,16 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -443,13 +443,6 @@
+ 
+         # 2. Projection Cache
+         cache = ProjectionCache(paths.cache_file)
+-        cache.delete_by_prefix(f"site:{site_id}:subject:{orig_subject_id}:")
+-        if orig_mrn:
+-            cache.delete(f"site:{site_id}:mrn:{orig_mrn}")
+-        for k, val in list(cache.all_items().items()):
+-            serialized = json.dumps(val)
+-            if orig_subject_id in k or orig_subject_id in serialized or (orig_mrn and orig_mrn in serialized):
+-                cache.delete(k)
+         cache.delete(f"trial:{trial_id}:safety_summary")
+ 
+         # 3. Blob Store (delete eConsent, de-identify central-lab blobs + .meta.json)

@@ -1,0 +1,21 @@
+# Local environments and caches
+.venv/
+uv.lock
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Ephemeral TrialVault runtime data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Harbor job runs & temp calibration dirs
+jobs/
+.tmp_calibrate/
+
+# Personal application prep notes (kept local, excluded from public repo)
+APPLICATION_KIT.md

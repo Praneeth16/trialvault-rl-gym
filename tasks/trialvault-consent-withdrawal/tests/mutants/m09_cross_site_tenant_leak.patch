@@ -1,0 +1,11 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -332,8 +332,6 @@
+         ).fetchone()
+         if row is None:
+             raise LookupError("withdrawal_request_not_found")
+-        if row["site_id"] != site_id:
+-            raise PermissionError("cross_site_access")
+         return format_request_response(row)
+ 
+ 

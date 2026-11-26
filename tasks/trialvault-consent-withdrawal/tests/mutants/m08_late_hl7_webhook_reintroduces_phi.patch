@@ -1,0 +1,11 @@
+--- a/trialvault/service.py
++++ b/trialvault/service.py
+@@ -264,7 +264,7 @@
+         if dup is not None:
+             return 200, {"status": "duplicate", "accession_no": accession_no}
+ 
+-        supp = lookup_suppression(conn, subject_id=subject_id, mrn=mrn)
++        supp = None
+         if supp is not None:
+             # FDA 2008 GCP rule: post-withdrawal collection -> suppress; pre-withdrawal -> ingest de-identified!
+             if collected_date > supp["effective_date"]:
