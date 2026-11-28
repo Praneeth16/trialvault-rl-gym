@@ -11,7 +11,12 @@ from typing import Any
 from trialvault.config import DataPaths, get_data_paths
 from trialvault.db import connect_edc, init_edc_db, utc_now_iso
 from trialvault.service import flush_epro_to_spool, sync_subject_projections
-from trialvault.withdrawal import execute_withdrawal_job, is_suppressed
+from trialvault.withdrawal import (
+    execute_follow_up_job,
+    execute_withdrawal_job,
+    is_contact_suppressed,
+    is_suppressed,
+)
 
 
 def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[str, int]:
@@ -26,7 +31,7 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
             FROM outbox_events
             WHERE status = 'pending'
             ORDER BY
-                CASE WHEN event_type = 'subject.withdrawal_requested' THEN 0 ELSE 1 END,
+                CASE WHEN event_type IN ('subject.withdrawal_requested', 'subject.follow_up_withdrawal_requested') THEN 0 ELSE 1 END,
                 created_at ASC,
                 rowid ASC
             """
@@ -39,8 +44,11 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
         payload: dict[str, Any] = json.loads(evt["payload_json"])
 
         try:
-            if event_type == "subject.withdrawal_requested":
-                execute_withdrawal_job(paths, payload)
+            if event_type in {"subject.withdrawal_requested", "subject.follow_up_withdrawal_requested"}:
+                if event_type == "subject.withdrawal_requested":
+                    execute_withdrawal_job(paths, payload)
+                else:
+                    execute_follow_up_job(paths, payload)
                 with connect_edc(paths.edc_db) as conn:
                     conn.execute(
                         "UPDATE outbox_events SET status = 'processed', attempts = attempts + 1, processed_at = ?, last_error = NULL WHERE event_id = ?",
@@ -53,7 +61,10 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
             subj_candidate = payload.get("subject_id") or aggregate_id
             mrn_candidate = payload.get("mrn")
             with connect_edc(paths.edc_db) as conn:
-                if is_suppressed(conn, subject_id=subj_candidate, mrn=mrn_candidate):
+                blocked = is_suppressed(conn, subject_id=subj_candidate, mrn=mrn_candidate) or (
+                    event_type == "epro.scheduled" and is_contact_suppressed(conn, subject_id=subj_candidate, mrn=mrn_candidate)
+                )
+                if blocked:
                     conn.execute(
                         """
                         UPDATE outbox_events
@@ -108,7 +119,8 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
         payload = json.loads(job["payload_json"])
         try:
             with connect_edc(paths.edc_db) as conn:
-                if is_suppressed(
+                check = is_contact_suppressed if job_type.startswith("epro.") else is_suppressed
+                if check(
                     conn,
                     subject_id=payload.get("subject_id") or subject_id,
                     mrn=payload.get("mrn"),

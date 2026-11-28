@@ -98,6 +98,10 @@ export function SimulatorView() {
       </aside>
 
       <section className="stage-panel" aria-label="Five-store interactive inspector">
+        <p className="simulator-note">
+          Illustrative client-side replica of a full-scope withdrawal. It does not run the Python
+          app or the verifier; real scores come from the Calibration and Mutants tabs.
+        </p>
         <div className="stage-toolbar">
           <div className="stage-controls">
             <label htmlFor="sim-action-select" className="list-item-meta">

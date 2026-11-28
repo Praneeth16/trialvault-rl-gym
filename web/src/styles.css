@@ -345,6 +345,14 @@ body {
   gap: 0.875rem;
 }
 
+.simulator-note {
+  margin: 0;
+  padding: 0.625rem 1.25rem;
+  font-size: var(--text-body);
+  color: var(--ink-secondary);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
 .stage-controls {
   display: flex;
   flex-wrap: wrap;

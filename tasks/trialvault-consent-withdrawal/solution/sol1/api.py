@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.responses import JSONResponse
@@ -23,7 +23,11 @@ from trialvault.service import (
     record_visit,
     schedule_epro_reminder,
 )
-from trialvault.withdrawal import create_withdrawal_request, get_withdrawal_request
+from trialvault.withdrawal import (
+    ContactWithdrawnError,
+    create_withdrawal_request,
+    get_withdrawal_request,
+)
 
 
 def _paths() -> DataPaths:
@@ -74,6 +78,7 @@ class SubjectEnrollRequest(BaseModel):
     hold_reason: str | None = None
     household_group_id: str | None = None
     investigator_name: str = "Dr. Hannah Lin"
+    aliases: list[str] = Field(default_factory=list)
 
 
 class VisitCreateRequest(BaseModel):
@@ -130,6 +135,7 @@ class CentralLabWebhookRequest(BaseModel):
     reference_flag: str = "NORMAL"
     collected_date: str
     study_day: int
+    shipment_id: str | None = None
     patient_demographics: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -137,6 +143,7 @@ class WithdrawalCreateRequest(BaseModel):
     reason: str = "participant_request"
     requested_by: str | None = None
     effective_date: str | None = None
+    scope: Literal["full", "follow_up_only"] = "full"
 
 
 app = FastAPI(title="TrialVault Clinical Trial EDC", version="0.5.0")
@@ -230,6 +237,8 @@ def api_schedule_epro(subject_id: str, body: EproReminderRequest, site: dict[str
     require_scope(site, "edc:write")
     try:
         return schedule_epro_reminder(_paths(), site_id=site["site_id"], subject_id=subject_id, data={k: v for k, v in body.model_dump().items() if v is not None})
+    except ContactWithdrawnError:
+        return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"error": "contact_withdrawn"})
     except LookupError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subject_not_found")
     except PermissionError:
@@ -256,6 +265,7 @@ def api_create_withdrawal(
             requested_by=req_body.requested_by or actor,
             effective_date=req_body.effective_date,
             idempotency_key=idempotency_key,
+            scope=req_body.scope,
         )
     except LookupError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subject_not_found")

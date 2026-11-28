@@ -198,9 +198,10 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=2, help="Number of independent trials")
     parser.add_argument("--timeout-sec", type=int, default=600)
     parser.add_argument("--eval-runs", type=int, default=3)
+    parser.add_argument("--first-run", type=int, default=1, help="Index of the first trial (for parallel launches)")
     args = parser.parse_args()
 
-    for idx in range(1, args.runs + 1):
+    for idx in range(args.first_run, args.first_run + args.runs):
         run_calibration(
             harness=args.harness,
             model=args.model,

@@ -10,7 +10,7 @@ from typing import Any
 
 from trialvault.config import DataPaths, get_data_paths
 from trialvault.db import connect_edc, init_edc_db, utc_now_iso
-from trialvault.saga_engine import advance_pending_sagas, check_suppressed
+from trialvault.saga_engine import advance_pending_sagas, check_contact_blocked, check_suppressed
 from trialvault.service import flush_epro_to_spool, sync_subject_projections
 
 
@@ -32,7 +32,8 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
         payload: dict[str, Any] = json.loads(evt["payload_json"])
         try:
             with connect_edc(paths.edc_db) as conn:
-                if check_suppressed(conn, subject_id=payload.get("subject_id") or aggregate_id, mrn=payload.get("mrn")):
+                ref = {"subject_id": payload.get("subject_id") or aggregate_id, "mrn": payload.get("mrn")}
+                if check_suppressed(conn, **ref) or (event_type == "epro.scheduled" and check_contact_blocked(conn, **ref)):
                     conn.execute(
                         "UPDATE outbox_events SET status = 'suppressed', aggregate_id = 'SUPPRESSED', payload_json = '{\"suppressed\": true}', attempts = attempts + 1, processed_at = ?, last_error = NULL WHERE event_id = ?",
                         (clock_now, event_id),
@@ -72,7 +73,8 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
         payload = json.loads(job["payload_json"])
         try:
             with connect_edc(paths.edc_db) as conn:
-                if check_suppressed(conn, subject_id=payload.get("subject_id") or subject_id, mrn=payload.get("mrn")):
+                gate = check_contact_blocked if job_type.startswith("epro.") else check_suppressed
+                if gate(conn, subject_id=payload.get("subject_id") or subject_id, mrn=payload.get("mrn")):
                     conn.execute(
                         "UPDATE scheduled_jobs SET status = 'suppressed', subject_id = 'SUPPRESSED', payload_json = '{\"suppressed\": true}', attempts = attempts + 1, executed_at = ?, last_error = NULL WHERE job_id = ?",
                         (clock_now, job_id),

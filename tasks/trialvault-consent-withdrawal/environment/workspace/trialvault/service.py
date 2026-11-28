@@ -80,6 +80,7 @@ def build_subject_search_text(row: dict[str, Any]) -> str:
         row.get("emergency_contact_name") or "",
         row.get("treatment_arm") or "",
         row.get("investigator_name") or "",
+        *json.loads(row.get("aliases_json") or "[]"),
     ]
     return " ".join(p for p in parts if p)
 
@@ -175,14 +176,14 @@ def enroll_subject(
                 device_serial, ip_address, portal_url, emergency_contact_name,
                 emergency_contact_phone, treatment_arm, randomization_date, status,
                 regulatory_hold, hold_reason, anon_subject_ref, household_group_id,
-                investigator_name, created_at, updated_at
+                investigator_name, aliases_json, created_at, updated_at
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, 'active',
                 ?, ?, NULL, ?,
-                ?, ?, ?
+                ?, ?, ?, ?
             )
             """,
             (
@@ -212,6 +213,7 @@ def enroll_subject(
                 data.get("hold_reason"),
                 data.get("household_group_id"),
                 data.get("investigator_name", "Dr. Hannah Lin"),
+                json.dumps(data.get("aliases") or []),
                 now,
                 now,
             ),
@@ -686,9 +688,55 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
             "collected_date": payload["collected_date"],
         },
     )
+    if payload.get("shipment_id"):
+        record_shipment_specimen(
+            blobs,
+            site_id=site_id,
+            trial_id=trial_id,
+            shipment_id=payload["shipment_id"],
+            specimen={
+                "accession_no": accession_no,
+                "subject_id": resolved_subject_id,
+                "mrn": raw_hl7["PID"]["mrn"],
+                "patient_name": raw_hl7["PID"]["patient_name"],
+                "collected_date": payload["collected_date"],
+                "analyte": payload["analyte"],
+            },
+        )
 
     ProjectionCache(paths.cache_file).delete(f"trial:{trial_id}:safety_summary")
     return 201, {"status": "ingested", "lab_id": lab_id, "accession_no": accession_no, "blob_key": blob_key}
+
+
+def record_shipment_specimen(
+    blobs: BlobStore,
+    *,
+    site_id: str,
+    trial_id: str,
+    shipment_id: str,
+    specimen: dict[str, Any],
+) -> None:
+    """Append a specimen to the multi-participant central-lab shipment manifest."""
+    key = f"labs/{site_id}/shipments/{shipment_id}.json"
+    existing = blobs.get_json(key)
+    if existing is None:
+        doc: dict[str, Any] = {"shipment_id": shipment_id, "site_id": site_id, "specimens": []}
+        meta: dict[str, Any] = {
+            "doc_type": "lab_shipment_manifest",
+            "site_id": site_id,
+            "trial_id": trial_id,
+            "shipment_id": shipment_id,
+            "subject_ids": [],
+            "accession_nos": [],
+        }
+    else:
+        doc, meta = existing
+    doc["specimens"].append(specimen)
+    ref = specimen.get("subject_id") or specimen.get("anon_subject_ref")
+    if ref and ref not in meta["subject_ids"]:
+        meta["subject_ids"].append(ref)
+    meta["accession_nos"].append(specimen["accession_no"])
+    blobs.put_json(key, doc, meta)
 
 
 def compute_safety_summary(paths: DataPaths, trial_id: str) -> dict[str, Any]:

@@ -1,0 +1,10 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -550,7 +550,6 @@
+                     "anon_subject_ref": anon_ref,
+                 }
+                 blobs.put_json(lab["blob_key"], clean_payload, clean_meta)
+-        _deidentify_shipment_manifests(blobs, site_id=site_id, orig_subject_id=orig_subject_id, orig_mrn=orig_mrn, anon_ref=anon_ref)
+ 
+         # 4. Outbound ePRO Spool & Dead-Letter Queue
+         spool = SpoolStore(paths.outbound_queue, paths.dead_letters)

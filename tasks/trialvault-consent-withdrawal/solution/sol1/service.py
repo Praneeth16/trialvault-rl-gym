@@ -15,7 +15,12 @@ from trialvault.config import DataPaths
 from trialvault.db import connect_edc, utc_now_iso
 from trialvault.search import SearchIndex
 from trialvault.spool import SpoolStore
-from trialvault.withdrawal import is_suppressed, lookup_suppression
+from trialvault.withdrawal import (
+    ContactWithdrawnError,
+    is_contact_suppressed,
+    is_suppressed,
+    lookup_suppression,
+)
 
 
 def opaque_audit_ref(prefix: str, raw_id: str) -> str:
@@ -71,6 +76,7 @@ def build_subject_search_text(row: dict[str, Any]) -> str:
         row.get("street_address") or "", row.get("city") or "", row.get("state") or "",
         row.get("postal_code") or "", row.get("device_serial") or "", row.get("portal_url") or "",
         row.get("emergency_contact_name") or "", row.get("treatment_arm") or "", row.get("investigator_name") or "",
+        *json.loads(row.get("aliases_json") or "[]"),
     ]
     return " ".join(p for p in parts if p)
 
@@ -124,14 +130,14 @@ def enroll_subject(paths: DataPaths, *, site_id: str, trial_id: str, actor: str,
                 device_serial, ip_address, portal_url, emergency_contact_name,
                 emergency_contact_phone, treatment_arm, randomization_date, status,
                 regulatory_hold, hold_reason, anon_subject_ref, household_group_id,
-                investigator_name, created_at, updated_at
+                investigator_name, aliases_json, created_at, updated_at
             ) VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?,
                 ?, ?, ?, 'active',
                 ?, ?, NULL, ?,
-                ?, ?, ?
+                ?, ?, ?, ?
             )
             """,
             (
@@ -141,7 +147,7 @@ def enroll_subject(paths: DataPaths, *, site_id: str, trial_id: str, actor: str,
                 data["ip_address"], data["portal_url"], data["emergency_contact_name"],
                 data["emergency_contact_phone"], data["treatment_arm"], data["randomization_date"],
                 1 if data.get("regulatory_hold") else 0, data.get("hold_reason"),
-                data.get("household_group_id"), data.get("investigator_name", "Dr. Hannah Lin"), now, now,
+                data.get("household_group_id"), data.get("investigator_name", "Dr. Hannah Lin"), json.dumps(data.get("aliases") or []), now, now,
             ),
         )
         append_audit_event(
@@ -234,6 +240,8 @@ def schedule_epro_reminder(paths: DataPaths, *, site_id: str, subject_id: str, d
             raise LookupError("subject_not_found")
         if subj["site_id"] != site_id:
             raise PermissionError("cross_site_access")
+        if is_contact_suppressed(conn, subject_id=subject_id):
+            raise ContactWithdrawnError(subject_id)
         recipient = data.get("recipient") or subj["email"]
         payload = data.get("payload") or {
             "subject_id": subject_id, "mrn": subj["mrn"], "full_name": subj["full_name"],
@@ -319,6 +327,11 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
                 },
                 metadata={"doc_type": "central_lab", "site_id": site_id, "trial_id": trial_id, "accession_no": accession_no, "anon_subject_ref": anon_ref},
             )
+            if payload.get("shipment_id"):
+                record_shipment_specimen(
+                    BlobStore(paths.blobs_dir), site_id=site_id, trial_id=trial_id, shipment_id=payload["shipment_id"],
+                    specimen={"accession_no": accession_no, "anon_subject_ref": anon_ref, "analyte": payload["analyte"]},
+                )
             ProjectionCache(paths.cache_file).delete(f"trial:{trial_id}:safety_summary")
             return 201, {
                 "status": "ingested_deidentified",
@@ -394,8 +407,47 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
         },
         metadata={"doc_type": "central_lab", "site_id": site_id, "trial_id": trial_id, "accession_no": accession_no, "subject_id": resolved_subject_id, "mrn": raw_hl7["PID"]["mrn"], "patient_name": raw_hl7["PID"]["patient_name"], "collected_date": payload["collected_date"]},
     )
+    if payload.get("shipment_id"):
+        record_shipment_specimen(
+            BlobStore(paths.blobs_dir), site_id=site_id, trial_id=trial_id, shipment_id=payload["shipment_id"],
+            specimen={
+                "accession_no": accession_no, "subject_id": resolved_subject_id, "mrn": raw_hl7["PID"]["mrn"],
+                "patient_name": raw_hl7["PID"]["patient_name"], "collected_date": payload["collected_date"], "analyte": payload["analyte"],
+            },
+        )
     ProjectionCache(paths.cache_file).delete(f"trial:{trial_id}:safety_summary")
     return 201, {"status": "ingested", "lab_id": lab_id, "accession_no": accession_no, "blob_key": blob_key}
+
+
+def record_shipment_specimen(
+    blobs: BlobStore,
+    *,
+    site_id: str,
+    trial_id: str,
+    shipment_id: str,
+    specimen: dict[str, Any],
+) -> None:
+    """Append a specimen to the multi-participant central-lab shipment manifest."""
+    key = f"labs/{site_id}/shipments/{shipment_id}.json"
+    existing = blobs.get_json(key)
+    if existing is None:
+        doc: dict[str, Any] = {"shipment_id": shipment_id, "site_id": site_id, "specimens": []}
+        meta: dict[str, Any] = {
+            "doc_type": "lab_shipment_manifest",
+            "site_id": site_id,
+            "trial_id": trial_id,
+            "shipment_id": shipment_id,
+            "subject_ids": [],
+            "accession_nos": [],
+        }
+    else:
+        doc, meta = existing
+    doc["specimens"].append(specimen)
+    ref = specimen.get("subject_id") or specimen.get("anon_subject_ref")
+    if ref and ref not in meta["subject_ids"]:
+        meta["subject_ids"].append(ref)
+    meta["accession_nos"].append(specimen["accession_no"])
+    blobs.put_json(key, doc, meta)
 
 
 def compute_safety_summary(paths: DataPaths, trial_id: str) -> dict[str, Any]:

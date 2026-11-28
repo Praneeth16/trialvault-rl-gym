@@ -82,7 +82,7 @@ export function App() {
           <div>
             <h1 className="page-title">
               {tab === 'simulator' && 'Clinical consent withdrawal under HIPAA and 21 CFR Part 11'}
-              {tab === 'calibration' && 'RewardKit 28-check verifier and live model calibration'}
+              {tab === 'calibration' && `RewardKit ${repoData.summary.verifier_spec.checks_count}-check verifier and live model calibration`}
               {tab === 'mutants' && 'Planted bug mutants proving black-box verifier coverage'}
             </h1>
             <p className="page-desc">

@@ -76,6 +76,7 @@ class SubjectEnrollRequest(BaseModel):
     hold_reason: str | None = None
     household_group_id: str | None = None
     investigator_name: str = "Dr. Hannah Lin"
+    aliases: list[str] = Field(default_factory=list)
 
 
 class VisitCreateRequest(BaseModel):
@@ -132,6 +133,7 @@ class CentralLabWebhookRequest(BaseModel):
     reference_flag: str = "NORMAL"
     collected_date: str
     study_day: int
+    shipment_id: str | None = None
     patient_demographics: dict[str, Any] = Field(default_factory=dict)
 
 

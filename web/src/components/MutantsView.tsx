@@ -24,7 +24,7 @@ export function MutantsView({ data }: Props) {
     <div className="workbench-grid">
       <aside className="rail" aria-label="Planted single-bug mutants">
         <div>
-          <h2 className="section-heading">Planted bug mutants (10 of 10 killed)</h2>
+          <h2 className="section-heading">Planted bug mutants ({data.mutants.length} of {data.mutants.length} killed)</h2>
           <div className="list-panel" role="listbox" aria-label="Select mutant patch">
             {data.mutants.map((m) => {
               const active = m.id === selected.id;

@@ -1,4 +1,4 @@
-"""Criterion 6: Transient Failure & Crash Recovery (8.0% total weight, 2 checks)."""
+"""Criterion 6: Transient Failure & Crash Recovery (7.0% total weight, 2 checks)."""
 
 from rewardkit import criteria
 

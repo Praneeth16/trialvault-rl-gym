@@ -1,0 +1,11 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -124,7 +124,7 @@
+         val = subj.get(f)
+         if val and isinstance(val, str) and val.strip():
+             tokens.add(val.strip())
+-    names = [subj.get("full_name") or "", *json.loads(subj.get("aliases_json") or "[]")]
++    names = [subj.get("full_name") or ""]
+     for name in names:
+         parts = [p for p in re.split(r"\s+", name.strip()) if p]
+         if name.strip():

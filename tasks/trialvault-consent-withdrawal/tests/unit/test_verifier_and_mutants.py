@@ -1,4 +1,4 @@
-"""Verifier self-tests: boundary scores (starter=0.0, sol1=1.0, sol2=1.0) and 10/10 mutant kills."""
+"""Verifier self-tests: boundary scores (starter=0.0, sol1=1.0, sol2=1.0) and 15/15 mutant kills."""
 
 from __future__ import annotations
 

@@ -1,0 +1,16 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -566,13 +566,6 @@
+         # 5. Atomic EDC relational de-id + DSMB snapshots + webhook_inbox + scheduled_jobs + Part 11 audit + complete
+         with connect_edc(paths.edc_db) as conn:
+             ensure_withdrawal_tables(conn)
+-            conn.execute("BEGIN IMMEDIATE")
+-            current = conn.execute(
+-                "SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)
+-            ).fetchone()
+-            if current["status"] == "completed":
+-                conn.rollback()
+-                return
+ 
+             _deidentify_dsmb_snapshots(
+                 paths,

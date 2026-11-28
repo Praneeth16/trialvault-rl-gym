@@ -1,4 +1,4 @@
-"""Criterion 1: API Contract & Idempotency (10.0% total weight, 5 checks)."""
+"""Criterion 1: API Contract & Idempotency (9.0% total weight, 5 checks)."""
 
 from rewardkit import criteria
 

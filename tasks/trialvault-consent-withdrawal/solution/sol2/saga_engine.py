@@ -29,8 +29,9 @@ CREATE TABLE IF NOT EXISTS privacy_sagas (
     request_id TEXT PRIMARY KEY,
     site_id TEXT NOT NULL,
     trial_id TEXT NOT NULL,
-    subject_digest TEXT NOT NULL UNIQUE,
-    anon_subject_ref TEXT NOT NULL UNIQUE,
+    subject_digest TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'full',
+    anon_subject_ref TEXT UNIQUE,
     effective_date TEXT NOT NULL,
     status TEXT NOT NULL,
     reason TEXT NOT NULL,
@@ -45,7 +46,15 @@ CREATE TABLE IF NOT EXISTS privacy_sagas (
     step_edc_done INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     completed_at TEXT,
-    error TEXT
+    error TEXT,
+    UNIQUE (subject_digest, scope)
+);
+
+CREATE TABLE IF NOT EXISTS contact_blocks (
+    kind TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    PRIMARY KEY (kind, digest)
 );
 
 CREATE TABLE IF NOT EXISTS saga_idempotency_keys (
@@ -67,6 +76,10 @@ CREATE TABLE IF NOT EXISTS suppression_digests (
     PRIMARY KEY (kind, digest)
 );
 """
+
+
+class ContactWithdrawnError(Exception):
+    pass
 
 
 def init_saga_schema(conn: sqlite3.Connection) -> None:
@@ -104,11 +117,28 @@ def check_suppressed(
     return find_suppression_digest(conn, subject_id=subject_id, mrn=mrn) is not None
 
 
+def check_contact_blocked(
+    conn: sqlite3.Connection,
+    *,
+    subject_id: str | None = None,
+    mrn: str | None = None,
+) -> bool:
+    if check_suppressed(conn, subject_id=subject_id, mrn=mrn):
+        return True
+    for kind, raw in (("subject_id", subject_id), ("mrn", mrn)):
+        if raw and conn.execute(
+            "SELECT 1 FROM contact_blocks WHERE kind = ? AND digest = ?", (kind, digest_identifier(raw))
+        ).fetchone():
+            return True
+    return False
+
+
 def _serialize_saga(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "request_id": row["request_id"],
         "site_id": row["site_id"],
         "status": row["status"],
+        "scope": row["scope"],
         "anon_subject_ref": row["anon_subject_ref"],
         "effective_date": row["effective_date"],
         "created_at": row["created_at"],
@@ -127,6 +157,7 @@ def start_withdrawal_saga(
     requested_by: str,
     effective_date: str | None,
     idempotency_key: str | None,
+    scope: str = "full",
 ) -> tuple[int, dict[str, Any]]:
     subj_digest = digest_identifier(subject_id)
     now = utc_now_iso()
@@ -152,9 +183,11 @@ def start_withdrawal_saga(
                 assert saga is not None
                 return 202, _serialize_saga(saga)
 
-        existing = conn.execute(
-            "SELECT * FROM privacy_sagas WHERE subject_digest = ?", (subj_digest,)
-        ).fetchone()
+        by_scope = {
+            r["scope"]: r
+            for r in conn.execute("SELECT * FROM privacy_sagas WHERE subject_digest = ?", (subj_digest,)).fetchall()
+        }
+        existing = by_scope.get("full") or by_scope.get(scope)
         if existing is not None:
             if existing["site_id"] != site_id:
                 raise PermissionError("cross_site_access")
@@ -171,7 +204,7 @@ def start_withdrawal_saga(
             raise LookupError("subject_not_found")
         if subj["site_id"] != site_id:
             raise PermissionError("cross_site_access")
-        if int(subj["regulatory_hold"]) == 1:
+        if scope == "full" and int(subj["regulatory_hold"]) == 1:
             return 409, {
                 "error": "blocked_regulatory_hold",
                 "status": "blocked_regulatory_hold",
@@ -179,28 +212,35 @@ def start_withdrawal_saga(
             }
 
         request_id = f"wdsaga-{uuid.uuid4().hex[:12]}"
-        anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}"
+        anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}" if scope == "full" else None
         trial_id = subj["trial_id"]
 
         conn.execute(
             """
             INSERT INTO privacy_sagas (
-                request_id, site_id, trial_id, subject_digest, anon_subject_ref,
+                request_id, site_id, trial_id, subject_digest, scope, anon_subject_ref,
                 effective_date, status, reason, requested_by, actor, working_subject_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
             """,
-            (request_id, site_id, trial_id, subj_digest, anon_ref, eff_date, reason, requested_by, actor, subject_id, now),
+            (request_id, site_id, trial_id, subj_digest, scope, anon_ref, eff_date, reason, requested_by, actor, subject_id, now),
         )
+        for kind, raw in (("subject_id", subject_id), ("mrn", subj["mrn"])):
+            if raw:
+                conn.execute(
+                    "INSERT OR IGNORE INTO contact_blocks (kind, digest, request_id) VALUES (?, ?, ?)",
+                    (kind, digest_identifier(raw), request_id),
+                )
         if idempotency_key:
             conn.execute(
                 "INSERT INTO saga_idempotency_keys (site_id, idem_key, subject_digest, request_id) VALUES (?, ?, ?, ?)",
                 (site_id, idempotency_key, subj_digest, request_id),
             )
-        conn.execute(
-            "INSERT OR IGNORE INTO suppression_digests (kind, digest, site_id, trial_id, anon_subject_ref, effective_date, request_id) VALUES ('subject_id', ?, ?, ?, ?, ?, ?)",
-            (subj_digest, site_id, trial_id, anon_ref, eff_date, request_id),
-        )
-        if subj["mrn"]:
+        if scope == "full":
+            conn.execute(
+                "INSERT OR IGNORE INTO suppression_digests (kind, digest, site_id, trial_id, anon_subject_ref, effective_date, request_id) VALUES ('subject_id', ?, ?, ?, ?, ?, ?)",
+                (subj_digest, site_id, trial_id, anon_ref, eff_date, request_id),
+            )
+        if scope == "full" and subj["mrn"]:
             conn.execute(
                 "INSERT OR IGNORE INTO suppression_digests (kind, digest, site_id, trial_id, anon_subject_ref, effective_date, request_id) VALUES ('mrn', ?, ?, ?, ?, ?, ?)",
                 (digest_identifier(subj["mrn"]), site_id, trial_id, anon_ref, eff_date, request_id),
@@ -241,11 +281,15 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
         anon_ref = saga["anon_subject_ref"]
         if not orig_subject_id:
             continue
+        if saga["scope"] == "follow_up_only":
+            _advance_follow_up_saga(paths, saga)
+            stats["completed"] += 1
+            continue
 
         try:
             with connect_edc(paths.edc_db) as conn:
                 conn.execute(
-                    "UPDATE privacy_sagas SET status = 'in_progress', error = NULL WHERE request_id = ?",
+                    "UPDATE privacy_sagas SET status = 'in_progress', error = NULL WHERE request_id = ? AND status != 'completed'",
                     (request_id,),
                 )
                 conn.commit()
@@ -305,6 +349,23 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                             {"accession_no": lb["accession_no"], "anon_subject_ref": anon_ref, "study_day": lb["study_day"], "results": b_payload.get("results", [])},
                             {"doc_type": b_meta.get("doc_type", "central_lab"), "site_id": site_id, "trial_id": trial_id, "accession_no": lb["accession_no"], "anon_subject_ref": anon_ref},
                         )
+                for key in blobs.list_keys(f"labs/{site_id}/shipments/"):
+                    got = blobs.get_json(key)
+                    if got is None:
+                        continue
+                    manifest, m_meta = got
+                    mine = [
+                        sp.get("subject_id") == orig_subject_id or (orig_mrn and sp.get("mrn") == orig_mrn)
+                        for sp in manifest.get("specimens", [])
+                    ]
+                    if not any(mine) and orig_subject_id not in m_meta.get("subject_ids", []):
+                        continue
+                    manifest["specimens"] = [
+                        {"accession_no": sp.get("accession_no"), "anon_subject_ref": anon_ref, "analyte": sp.get("analyte")} if hit else sp
+                        for sp, hit in zip(manifest.get("specimens", []), mine)
+                    ]
+                    m_meta["subject_ids"] = list(dict.fromkeys(anon_ref if x == orig_subject_id else x for x in m_meta.get("subject_ids", [])))
+                    blobs.put_json(key, manifest, m_meta)
                 with connect_edc(paths.edc_db) as conn:
                     conn.execute("UPDATE privacy_sagas SET step_blobs_done = 1 WHERE request_id = ?", (request_id,))
                     conn.commit()
@@ -324,8 +385,12 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                     conn.commit()
 
             done_at = utc_now_iso()
-            if not saga["step_exports_done"]:
-                with connect_edc(paths.edc_db) as conn:
+            with connect_edc(paths.edc_db) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if conn.execute("SELECT status FROM privacy_sagas WHERE request_id = ?", (request_id,)).fetchone()["status"] == "completed":
+                    conn.rollback()
+                    continue
+                if not saga["step_exports_done"]:
                     manifests = conn.execute("SELECT snapshot_id, file_path FROM export_manifests WHERE trial_id = ?", (trial_id,)).fetchall()
                     for m in manifests:
                         snap_path = paths.exports_dir / m["file_path"]
@@ -357,9 +422,7 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                             new_sha = write_snapshot_atomic(snap_path, doc)
                             conn.execute("UPDATE export_manifests SET sha256_checksum = ?, updated_at = ? WHERE snapshot_id = ?", (new_sha, done_at, m["snapshot_id"]))
                     conn.execute("UPDATE privacy_sagas SET step_exports_done = 1 WHERE request_id = ?", (request_id,))
-                    conn.commit()
 
-            with connect_edc(paths.edc_db) as conn:
                 for v in visits:
                     conn.execute(
                         "UPDATE visits SET visit_date = NULL, clinical_notes = ?, metadata_json = ? WHERE visit_id = ?",
@@ -417,7 +480,7 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                         device_serial = NULL, ip_address = NULL, portal_url = NULL,
                         emergency_contact_name = NULL, emergency_contact_phone = NULL,
                         randomization_date = NULL, status = 'withdrawn', anon_subject_ref = ?,
-                        household_group_id = NULL, updated_at = ?
+                        household_group_id = NULL, aliases_json = '[]', updated_at = ?
                     WHERE subject_id = ?
                     """,
                     (anon_ref, demo["dob"], demo["age_at_enrollment"], demo["age_bucket"], zip3, anon_ref, done_at, orig_subject_id),
@@ -436,10 +499,57 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
         except Exception as exc:
             with connect_edc(paths.edc_db) as conn:
                 conn.execute(
-                    "UPDATE privacy_sagas SET status = 'in_progress', completed_at = NULL, error = ? WHERE request_id = ?",
+                    "UPDATE privacy_sagas SET status = 'in_progress', completed_at = NULL, error = ? WHERE request_id = ? AND status != 'completed'",
                     (f"{type(exc).__name__}: {exc}", request_id),
                 )
                 conn.commit()
             stats["failed"] += 1
 
     return stats
+
+
+def _advance_follow_up_saga(paths: DataPaths, saga: dict[str, Any]) -> None:
+    from trialvault.service import sync_subject_projections
+
+    request_id = saga["request_id"]
+    subject_id = saga["working_subject_id"]
+    with connect_edc(paths.edc_db) as conn:
+        row = conn.execute("SELECT mrn FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+    mrn = row["mrn"] if row else None
+
+    spool = SpoolStore(paths.outbound_queue, paths.dead_letters)
+    keep = [r for r in spool.read_outbound() if r.get("subject_id") != subject_id and not (mrn and r.get("mrn") == mrn)]
+    spool.replace_outbound(keep)
+    keep_dlq = [r for r in spool.read_dead_letters() if r.get("subject_id") != subject_id and not (mrn and r.get("mrn") == mrn)]
+    spool.replace_dead_letters(keep_dlq)
+
+    done_at = utc_now_iso()
+    with connect_edc(paths.edc_db) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("SELECT status FROM privacy_sagas WHERE request_id = ?", (request_id,)).fetchone()["status"] == "completed":
+            conn.rollback()
+            return
+        conn.execute("UPDATE epro_notifications SET status = 'cancelled' WHERE subject_id = ? AND status = 'pending'", (subject_id,))
+        conn.execute(
+            "UPDATE scheduled_jobs SET status = 'cancelled' WHERE subject_id = ? AND status = 'scheduled' AND job_type LIKE 'epro.%'",
+            (subject_id,),
+        )
+        conn.execute(
+            "UPDATE outbox_events SET status = 'suppressed' WHERE aggregate_id = ? AND event_type = 'epro.scheduled' AND status = 'pending'",
+            (subject_id,),
+        )
+        conn.execute(
+            "UPDATE subjects SET status = 'follow_up_withdrawn', updated_at = ? WHERE subject_id = ? AND status = 'active'",
+            (done_at, subject_id),
+        )
+        append_audit_event(
+            conn, site_id=saga["site_id"], actor=saga["actor"], action="FOLLOW_UP_WITHDRAWN",
+            resource_type="withdrawal_request", resource_ref=request_id,
+            structural_payload={"request_id": request_id, "engine": "saga", "scope": "follow_up_only"},
+        )
+        conn.execute(
+            "UPDATE privacy_sagas SET status = 'completed', completed_at = ?, working_subject_id = NULL, error = NULL WHERE request_id = ?",
+            (done_at, request_id),
+        )
+        conn.commit()
+    sync_subject_projections(paths, subject_id)

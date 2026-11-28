@@ -3,8 +3,8 @@
   "verifier_spec": {
     "framework": "harbor-rewardkit==0.2.4",
     "harbor_version": "0.26.0",
-    "criteria_count": 8,
-    "checks_count": 28,
+    "criteria_count": 9,
+    "checks_count": 33,
     "max_single_check_weight_pct": 5.0,
     "fresh_seeded_runs_per_eval": 3,
     "aggregation": "min across 3 fresh-seeded runs per check, weighted-mean across criteria"
@@ -13,7 +13,7 @@
     "starter_untouched": 0.0,
     "oracle_solution_1_outbox": 1.0,
     "oracle_solution_2_saga": 1.0,
-    "mutants_killed": "10/10",
+    "mutants_killed": "15/15",
     "harbor_lint_root_agent": "pass (0 errors, 0 warnings)"
   },
   "verifier_audit_fixes": [
@@ -26,11 +26,107 @@
       "check": "async_convergence.epro_notifications_spool_and_dlq_sanitized",
       "issue_found_in_calibration": "Required retaining exact status ['cancelled', 'sent'] on epro_notifications even after the docs were refactored to pure policy style.",
       "fix": "Verified no pending notifications remain, recipient is NULL, zero PHI remains across DB/scheduled_jobs/spool/DLQ, and co-enrolled survivor delayed jobs still fire."
+    },
+    {
+      "check": "isolation_and_survivors.shared_shipment_manifest_scoped",
+      "issue_found_in_calibration": "Fixture accession numbers and shipment IDs embedded the same random tag as the participant's email and MRN, so a reasonable case-insensitive email-token redactor also clipped the withdrawn participant's accession number (1 of 3 fresh runs, zero PHI leaked).",
+      "fix": "Accession numbers and shipment IDs now use an independent random token, so only genuine PHI handling is scored."
     }
   ],
+  "difficulty_takeaway": "On v3, frontier agents average 97.4% partial credit but only 1 of 6 runs fully pass (reward 1.0). The remaining failures are concentrated in two narrow obligations, replay suppression and initials redaction, that agents reproduce consistently across both runs, which points to genuine blind spots rather than noise. Partial credit stays high because the embedded 5-store stack fits in one context window; a multi-service variant (Postgres, OpenSearch, MinIO, Redpanda) is the honest route to lower partial scores.",
   "calibration_runs": [
     {
       "file": "claude-haiku-4.5_run1.json",
+      "harness": "claude-code-cli",
+      "model": "claude-haiku-4.5",
+      "verifier_stage": "v3",
+      "run_index": 1,
+      "elapsed_sec": 753.76,
+      "exit_code": 0,
+      "reward": 0.9571,
+      "passed_checks": "32/33",
+      "full_pass": false,
+      "failures": [
+        "replay_and_late_webhooks.replayed_outbox_event_suppressed: Real bug: replayed outbox event re-delivers plaintext subject_id, MRN, name, and email after withdrawal"
+      ]
+    },
+    {
+      "file": "claude-haiku-4.5_run2.json",
+      "harness": "claude-code-cli",
+      "model": "claude-haiku-4.5",
+      "verifier_stage": "v3",
+      "run_index": 2,
+      "elapsed_sec": 753.61,
+      "exit_code": 0,
+      "reward": 0.9571,
+      "passed_checks": "32/33",
+      "full_pass": false,
+      "failures": [
+        "replay_and_late_webhooks.replayed_outbox_event_suppressed: Real bug: replayed outbox event re-delivers plaintext subject_id, MRN, name, and email after withdrawal"
+      ]
+    },
+    {
+      "file": "claude-sonnet-5_run1.json",
+      "harness": "claude-code-cli",
+      "model": "claude-sonnet-5",
+      "verifier_stage": "v3",
+      "run_index": 1,
+      "elapsed_sec": 1102.4,
+      "exit_code": 0,
+      "reward": 0.9769,
+      "passed_checks": "32/33",
+      "full_pass": false,
+      "failures": [
+        "isolation_and_survivors.shared_shipment_manifest_scoped: Verifier artifact (fixed): accession IDs shared the PHI tag, so a case-insensitive email-token redactor clipped 'ACC-PRI-R\u2026'; zero PHI leaked"
+      ]
+    },
+    {
+      "file": "claude-sonnet-5_run2.json",
+      "harness": "claude-code-cli",
+      "model": "claude-sonnet-5",
+      "verifier_stage": "v3",
+      "run_index": 2,
+      "elapsed_sec": 748.02,
+      "exit_code": 0,
+      "reward": 1.0,
+      "passed_checks": "33/33",
+      "full_pass": true,
+      "failures": []
+    },
+    {
+      "file": "codex-gpt-6.2-sol_run1.json",
+      "harness": "codex-cli",
+      "model": "gpt-6.2-sol (default)",
+      "verifier_stage": "v3",
+      "run_index": 1,
+      "elapsed_sec": 857.89,
+      "exit_code": 0,
+      "reward": 0.9752,
+      "passed_checks": "32/33",
+      "full_pass": false,
+      "failures": [
+        "active_store_deid.aliases_and_initials_redacted: Real bug: dotted initials 'N.K.' left in clinical notes although the policy doc names them"
+      ]
+    },
+    {
+      "file": "codex-gpt-6.2-sol_run2.json",
+      "harness": "codex-cli",
+      "model": "gpt-6.2-sol (default)",
+      "verifier_stage": "v3",
+      "run_index": 2,
+      "elapsed_sec": 1038.58,
+      "exit_code": 0,
+      "reward": 0.9752,
+      "passed_checks": "32/33",
+      "full_pass": false,
+      "failures": [
+        "active_store_deid.aliases_and_initials_redacted: Real bug: dotted initials 'N.K.' left in clinical notes although the policy doc names them"
+      ]
+    }
+  ],
+  "calibration_runs_v2_history": [
+    {
+      "file": "v2/claude-haiku-4.5_run1.json",
       "harness": "claude-code-cli",
       "model": "claude-haiku-4.5",
       "verifier_stage": "v2_pre_audit",
@@ -43,7 +139,7 @@
       ]
     },
     {
-      "file": "codex-gpt-6.2-sol_run1.json",
+      "file": "v2/codex-gpt-6.2-sol_run1.json",
       "harness": "codex-cli",
       "model": "gpt-6.2-sol (high)",
       "verifier_stage": "v2_pre_audit",
@@ -57,7 +153,7 @@
       ]
     },
     {
-      "file": "codex-gpt-6.2-sol-full_run1.json",
+      "file": "v2/codex-gpt-6.2-sol-full_run1.json",
       "harness": "codex-cli",
       "model": "gpt-6.2-sol (high)",
       "verifier_stage": "v2_pre_audit",
@@ -70,7 +166,7 @@
       ]
     },
     {
-      "file": "claude-sonnet-5_run1.json",
+      "file": "v2/claude-sonnet-5_run1.json",
       "harness": "claude-code-cli",
       "model": "claude-sonnet-5",
       "verifier_stage": "v2_post_audit",
@@ -81,5 +177,12 @@
       "real_failures": []
     }
   ],
-  "difficulty_takeaway": "Audited v2 proves zero fake difficulty and 100% design-independence (independent agent scored 1.000 without seeing tests/solution). Because the portable zero-daemon Python/SQLite stack fits in ~15k context tokens, late-2026 frontier models score 83-100%; pushing frontier single-pass scores below 30% requires scaling to multi-service Docker Compose (Postgres, Redis, OpenSearch, MinIO, Redpanda, Mailpit) with cross-service async races."
+  "calibration_aggregate_v3": {
+    "runs": 6,
+    "agent_timeout_sec": 1800,
+    "mean_reward": 0.9736,
+    "full_pass_runs": "1/6",
+    "full_pass_rate_pct": 16.7,
+    "full_pass_rate_after_artifact_fix_upper_bound_pct": 33.3
+  }
 }

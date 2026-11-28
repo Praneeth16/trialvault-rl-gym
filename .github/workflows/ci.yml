@@ -7,7 +7,7 @@ on:
 
 jobs:
   lint-and-mutants:
-    name: Ruff, Harbor Lint, Boundary Scores & 10-Mutant Kill Suite
+    name: Ruff, Harbor Lint, Boundary Scores & 15-Mutant Kill Suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
         run: |
           PYTHONPATH=tasks/trialvault-consent-withdrawal/environment/workspace \
             uv run --python 3.12 pytest -v tasks/trialvault-consent-withdrawal/environment/workspace/tests/test_baseline_edc.py
-      - name: Verifier boundary & 10-mutant kill suite
+      - name: Verifier boundary & 15-mutant kill suite
         run: uv run --python 3.12 pytest -v
       - name: Harbor static lint (with root-agent rule)
         run: uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-consent-withdrawal

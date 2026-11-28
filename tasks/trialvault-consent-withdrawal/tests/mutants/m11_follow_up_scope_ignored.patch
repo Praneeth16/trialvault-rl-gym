@@ -1,0 +1,10 @@
+--- a/trialvault/api.py
++++ b/trialvault/api.py
+@@ -265,7 +265,6 @@
+             requested_by=req_body.requested_by or actor,
+             effective_date=req_body.effective_date,
+             idempotency_key=idempotency_key,
+-            scope=req_body.scope,
+         )
+     except LookupError:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subject_not_found")

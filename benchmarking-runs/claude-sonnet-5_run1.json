@@ -1,21 +1,15 @@
 {
-  "timestamp_utc": "2026-11-26T09:58:56.049527+00:00",
+  "timestamp_utc": "2026-11-28T04:38:48.699120+00:00",
   "label": "claude-sonnet-5",
   "harness": "claude",
   "model": "sonnet",
   "run_index": 1,
   "agent_exit_code": 0,
-  "elapsed_sec": 669.28,
+  "elapsed_sec": 1102.4,
   "changed_files": [
     "M README.md",
-    " M trialvault/__pycache__/api.cpython-312.pyc",
-    " M trialvault/__pycache__/db.cpython-312.pyc",
-    " M trialvault/__pycache__/exports.cpython-312.pyc",
-    " M trialvault/__pycache__/queries.cpython-312.pyc",
-    " M trialvault/__pycache__/search.cpython-312.pyc",
-    " M trialvault/__pycache__/service.cpython-312.pyc",
-    " M trialvault/__pycache__/worker.cpython-312.pyc",
     " M trialvault/api.py",
+    " M trialvault/audit.py",
     " M trialvault/db.py",
     " M trialvault/exports.py",
     " M trialvault/queries.py",
@@ -36,9 +30,10 @@
     "baseline_health": 1.0,
     "clinical_retention": 1.0,
     "failure_and_recovery": 1.0,
-    "isolation_and_survivors": 1.0,
+    "isolation_and_survivors": 0.7692,
     "replay_and_late_webhooks": 1.0,
-    "reward": 1.0
+    "withdrawal_scope": 1.0,
+    "reward": 0.9769
   },
   "details": {
     "active_store_deid": {
@@ -99,6 +94,14 @@
           "weight": 4.0,
           "description": "TrialVault black-box check: blobs_and_metadata_clean",
           "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] blobs_ok=True, dsmb_ok=True, snap_leaks=[], snap_sha=True"
+        },
+        {
+          "name": "aliases_and_initials_redacted",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault black-box check: aliases_and_initials_redacted",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] alias_leaks=[], notes_kept=True, survivor_alias_intact=True"
         }
       ],
       "kind": "programmatic"
@@ -112,7 +115,7 @@
           "raw": 1.0,
           "weight": 2.5,
           "description": "TrialVault black-box check: post_returns_202_pending",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] POST 202 body={'request_id': 'wd-c965f7fc2e6c4977', 'site_id': 'SITE1-R0EA96E', 'status': 'pending', 'anon_subject_ref': 'ANON-F083C730B5A6A822', 'effective_date': '2026-03-10', 'created_at': '2026-03-10T12:00:00+00:00', 'completed_at': None, 'error': None}"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] POST HTTP 202 body={'request_id': 'wd-5ce8dee13fc74fcd', 'site_id': 'SITE1-R076080', 'status': 'pending', 'scope': 'full', 'anon_subject_ref': 'ANON-0FEEB29E2B0B83F3', 'effective_date': '2026-03-10', 'created_at': '2026-03-10T12:00:00+00:00', 'completed_at': None, 'error': None}"
         },
         {
           "name": "get_status_contract",
@@ -120,7 +123,7 @@
           "raw": 1.0,
           "weight": 2.0,
           "description": "TrialVault black-box check: get_status_contract",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] GET status HTTP 200 keys=['anon_subject_ref', 'completed_at', 'created_at', 'effective_date', 'error', 'request_id', 'site_id', 'status']"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] GET status HTTP 200 keys=['anon_subject_ref', 'completed_at', 'created_at', 'effective_date', 'error', 'request_id', 'scope', 'site_id', 'status']"
         },
         {
           "name": "unknown_subject_404",
@@ -128,7 +131,7 @@
           "raw": 1.0,
           "weight": 1.0,
           "description": "TrialVault black-box check: unknown_subject_404",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] unknown subject POST returned HTTP 404"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] unknown subject POST returned HTTP 404 (known subject POST=202)"
         },
         {
           "name": "idempotency_replay_same_subject",
@@ -175,6 +178,14 @@
           "weight": 4.0,
           "description": "TrialVault black-box check: epro_notifications_spool_and_dlq_sanitized",
           "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] db_notifs=True, sched_leaks=[], spool_leaks=[], surv_day30=True"
+        },
+        {
+          "name": "concurrent_workers_exactly_once",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault black-box check: concurrent_workers_exactly_once",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] post=202, worker_rcs=[0, 0, 0, 0], status=completed, chain=True (verified 36 hash-chained entries), consent_withdrawn_delta=1, orig_left=0, anon_rows=1"
         }
       ],
       "kind": "programmatic"
@@ -202,7 +213,7 @@
           "raw": 1.0,
           "weight": 5.0,
           "description": "TrialVault black-box check: safety_summary_arm_totals_preserved",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] matches_pre=True"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] primary_withdrawn=True, matches_pre=True"
         },
         {
           "name": "clinical_rows_retained_and_rekeyed",
@@ -218,7 +229,7 @@
           "raw": 1.0,
           "weight": 4.0,
           "description": "TrialVault black-box check: part11_audit_chain_valid",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] chain_ok=True (verified 23 hash-chained entries), rows=21->23"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] chain_ok=True (verified 29 hash-chained entries), rows=26->29"
         },
         {
           "name": "audit_pii_purged_and_withdrawal_event_logged",
@@ -226,7 +237,7 @@
           "raw": 1.0,
           "weight": 3.0,
           "description": "TrialVault black-box check: audit_pii_purged_and_withdrawal_event_logged",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] pii_left=0, wd_refs=['ANON-114D4BA4DDF4EF8C', 'ANON-F083C730B5A6A822'], audit_no_phi=True"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] pii_left=0, wd_refs=['ANON-0FEEB29E2B0B83F3', 'ANON-13EE5601F5BFB2AF'], audit_no_phi=True"
         }
       ],
       "kind": "programmatic"
@@ -240,7 +251,7 @@
           "raw": 1.0,
           "weight": 4.0,
           "description": "TrialVault black-box check: transient_fault_prevents_premature_completion",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] during fault: status=failed, error=blobs: IsADirectoryError"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] during fault: status=failed, error=IsADirectoryError: [Errno 21] Is a directory: '/private/var/folders/hc/mhbnb51j0pg3g4wspd1q9jmw0000gp/T/tv_eval_r0_7c1jzp87/blobs/labs/SITE1-R076080/ACC-FLT-R076080.json'"
         },
         {
           "name": "retry_after_fault_converges_cleanly",
@@ -254,7 +265,7 @@
       "kind": "programmatic"
     },
     "isolation_and_survivors": {
-      "score": 1.0,
+      "score": 0.7692,
       "criteria": [
         {
           "name": "cross_site_and_scope_isolation",
@@ -278,7 +289,15 @@
           "raw": 1.0,
           "weight": 3.0,
           "description": "TrialVault black-box check: co_enrolled_household_survivor_untouched",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] survivor_http=200, intact=True"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] primary_withdrawn=True, survivor_http=200, intact=True"
+        },
+        {
+          "name": "shared_shipment_manifest_scoped",
+          "value": 0.0,
+          "raw": 0.0,
+          "weight": 3.0,
+          "description": "TrialVault black-box check: shared_shipment_manifest_scoped",
+          "reasoning": "[min of 3 fresh runs: [0.0, 1.0, 1.0]] leaks=[], accs=['ACC-LATEPRE-TRIAL-R076080', 'ACC-PRI-R[REDACTED]', 'ACC-SURV-R076080'], survivor_entry={'accession_no': 'ACC-SURV-R076080', 'analyte': 'ALT', 'collected_date': '2026-02-26', 'mrn': 'MRN-SURV-R076080', 'patient_name': 'Tomasz KowalskiR076080', 'subject_id': 'SUBJ-SURV-R076080'}"
         }
       ],
       "kind": "programmatic"
@@ -292,7 +311,7 @@
           "raw": 1.0,
           "weight": 5.0,
           "description": "TrialVault black-box check: late_hl7_webhook_suppressed",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] post_wh=202, pre_wh=201/{\"status\":\"ingested_deidentified\",\"accession_no\":\"ACC-LATEPRE-TRIAL-R0EA96E\",\"anon_subject_ref\":\"ANO, pre_blob_clean=True"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] post_wh=202, pre_wh=201/{\"status\":\"ingested_deidentified\",\"accession_no\":\"ACC-LATEPRE-TRIAL-R076080\",\"anon_subject_ref\":\"ANO, pre_blob_clean=True"
         },
         {
           "name": "replayed_outbox_event_suppressed",
@@ -308,7 +327,29 @@
           "raw": 1.0,
           "weight": 4.0,
           "description": "TrialVault black-box check: active_subject_webhook_still_ingests",
-          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] active_wh=201, blob=True"
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] primary_withdrawn=True, active_wh=201, blob=True"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "withdrawal_scope": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "follow_up_only_stops_contact_keeps_data",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 5.0,
+          "description": "TrialVault black-box check: follow_up_only_stops_contact_keeps_data",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] post=202/{'request_id': 'wd-a6d475e857a748c3', 'site_id': 'SITE1-R076080', 'status': 'pending', 'scope': 'follow_up_only', 'anon_, req=completed, subject=200/follow_up_withdrawn, pending=0, live_jobs=0, spool_leaks=[], epro=409, lab=201"
+        },
+        {
+          "name": "scope_escalation_to_full",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 5.0,
+          "description": "TrialVault black-box check: scope_escalation_to_full",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] esc=202/{'request_id': 'wd-4ad2097bda604e6f', 'site_id': 'SITE1-R076080', 'status': 'pending', 'scope': 'full', 'anon_subject_re, again_fu=wd-4ad2097bda604e6f, default=wd-4ad2097bda604e6f, esc_status=completed, orig_read=404, anon_row=True"
         }
       ],
       "kind": "programmatic"

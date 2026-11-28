@@ -1,0 +1,13 @@
+--- a/trialvault/worker.py
++++ b/trialvault/worker.py
+@@ -61,9 +61,7 @@
+             subj_candidate = payload.get("subject_id") or aggregate_id
+             mrn_candidate = payload.get("mrn")
+             with connect_edc(paths.edc_db) as conn:
+-                blocked = is_suppressed(conn, subject_id=subj_candidate, mrn=mrn_candidate) or (
+-                    event_type == "epro.scheduled" and is_contact_suppressed(conn, subject_id=subj_candidate, mrn=mrn_candidate)
+-                )
++                blocked = is_suppressed(conn, subject_id=subj_candidate, mrn=mrn_candidate)
+                 if blocked:
+                     conn.execute(
+                         """

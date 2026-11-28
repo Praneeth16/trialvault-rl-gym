@@ -40,15 +40,25 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
     request_id TEXT PRIMARY KEY,
     site_id TEXT NOT NULL,
     trial_id TEXT NOT NULL,
-    subject_id_hash TEXT NOT NULL UNIQUE,
-    anon_subject_ref TEXT NOT NULL UNIQUE,
+    subject_id_hash TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'full',
+    anon_subject_ref TEXT UNIQUE,
     effective_date TEXT NOT NULL,
     status TEXT NOT NULL,
     reason TEXT NOT NULL,
     requested_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
     completed_at TEXT,
-    error TEXT
+    error TEXT,
+    UNIQUE (subject_id_hash, scope)
+);
+
+CREATE TABLE IF NOT EXISTS contact_suppressions (
+    id_type TEXT NOT NULL,
+    id_hash TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (id_type, id_hash)
 );
 
 CREATE TABLE IF NOT EXISTS withdrawal_idempotency (
@@ -72,6 +82,10 @@ CREATE TABLE IF NOT EXISTS withdrawal_suppressions (
     PRIMARY KEY (id_type, id_hash)
 );
 """
+
+
+class ContactWithdrawnError(Exception):
+    pass
 
 
 def sha256_id(value: str) -> str:
@@ -110,9 +124,16 @@ def collect_phi_tokens(subj: dict[str, Any], extra_dates: list[str] | None = Non
         val = subj.get(f)
         if val and isinstance(val, str) and val.strip():
             tokens.add(val.strip())
-    for part in re.split(r"\s+", (subj.get("full_name") or "").strip()):
-        if len(part) >= 3:
-            tokens.add(part)
+    names = [subj.get("full_name") or "", *json.loads(subj.get("aliases_json") or "[]")]
+    for name in names:
+        parts = [p for p in re.split(r"\s+", name.strip()) if p]
+        if name.strip():
+            tokens.add(name.strip())
+        for part in parts:
+            if len(part) >= 3:
+                tokens.add(part)
+        if len(parts) >= 2:
+            tokens.add(f"{parts[0][0]}.{parts[-1][0]}.")
     if extra_dates:
         for d in extra_dates:
             if d and d.strip():
@@ -178,12 +199,30 @@ def is_suppressed(
     return lookup_suppression(conn, subject_id=subject_id, mrn=mrn) is not None
 
 
+def is_contact_suppressed(
+    conn: sqlite3.Connection,
+    *,
+    subject_id: str | None = None,
+    mrn: str | None = None,
+) -> bool:
+    if is_suppressed(conn, subject_id=subject_id, mrn=mrn):
+        return True
+    for id_type, value in (("subject_id", subject_id), ("mrn", mrn)):
+        if value and conn.execute(
+            "SELECT 1 FROM contact_suppressions WHERE id_type = ? AND id_hash = ?",
+            (id_type, sha256_id(value)),
+        ).fetchone():
+            return True
+    return False
+
+
 def format_request_response(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     r = dict(row)
     return {
         "request_id": r["request_id"],
         "site_id": r["site_id"],
         "status": r["status"],
+        "scope": r["scope"],
         "anon_subject_ref": r["anon_subject_ref"],
         "effective_date": r["effective_date"],
         "created_at": r["created_at"],
@@ -202,6 +241,7 @@ def create_withdrawal_request(
     requested_by: str,
     effective_date: str | None,
     idempotency_key: str | None,
+    scope: str = "full",
 ) -> tuple[int, dict[str, Any]]:
     subj_hash = sha256_id(subject_id)
     now = utc_now_iso()
@@ -227,9 +267,12 @@ def create_withdrawal_request(
                 assert existing_req is not None
                 return 202, format_request_response(existing_req)
 
-        existing = conn.execute(
+        prior = conn.execute(
             "SELECT * FROM withdrawal_requests WHERE subject_id_hash = ?", (subj_hash,)
-        ).fetchone()
+        ).fetchall()
+        existing = next((r for r in prior if r["scope"] == "full"), None) or next(
+            (r for r in prior if r["scope"] == scope), None
+        )
         if existing is not None:
             if existing["site_id"] != site_id:
                 raise PermissionError("cross_site_access")
@@ -247,7 +290,7 @@ def create_withdrawal_request(
         if subj["site_id"] != site_id:
             raise PermissionError("cross_site_access")
 
-        if int(subj["regulatory_hold"]) == 1:
+        if scope == "full" and int(subj["regulatory_hold"]) == 1:
             return 409, {
                 "error": "blocked_regulatory_hold",
                 "status": "blocked_regulatory_hold",
@@ -255,23 +298,54 @@ def create_withdrawal_request(
             }
 
         request_id = f"wd-{uuid.uuid4().hex[:12]}"
-        anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}"
+        anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}" if scope == "full" else None
         trial_id = subj["trial_id"]
 
         conn.execute(
             """
             INSERT INTO withdrawal_requests (
-                request_id, site_id, trial_id, subject_id_hash, anon_subject_ref,
+                request_id, site_id, trial_id, subject_id_hash, scope, anon_subject_ref,
                 effective_date, status, reason, requested_by, created_at, completed_at, error
-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL)
             """,
-            (request_id, site_id, trial_id, subj_hash, anon_ref, eff_date, reason, requested_by, now),
+            (request_id, site_id, trial_id, subj_hash, scope, anon_ref, eff_date, reason, requested_by, now),
         )
         if idempotency_key:
             conn.execute(
                 "INSERT INTO withdrawal_idempotency (site_id, idempotency_key, subject_id_hash, request_id, created_at) VALUES (?, ?, ?, ?, ?)",
                 (site_id, idempotency_key, subj_hash, request_id, now),
             )
+        for id_type, value in (("subject_id", subject_id), ("mrn", subj["mrn"])):
+            if value:
+                conn.execute(
+                    "INSERT OR IGNORE INTO contact_suppressions (id_type, id_hash, request_id, created_at) VALUES (?, ?, ?, ?)",
+                    (id_type, sha256_id(value), request_id, now),
+                )
+
+        if scope == "follow_up_only":
+            conn.execute(
+                """
+                INSERT INTO outbox_events (
+                    event_id, event_type, aggregate_id, site_id, payload_json, status, created_at
+                ) VALUES (?, 'subject.follow_up_withdrawal_requested', ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    f"evt-{uuid.uuid4().hex[:12]}",
+                    request_id,
+                    site_id,
+                    json.dumps(
+                        {"request_id": request_id, "subject_id": subject_id, "site_id": site_id, "actor": actor},
+                        sort_keys=True,
+                    ),
+                    now,
+                ),
+            )
+            conn.commit()
+            created = conn.execute(
+                "SELECT * FROM withdrawal_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            assert created is not None
+            return 202, format_request_response(created)
 
         conn.execute(
             """
@@ -405,7 +479,7 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
         if req is None or req["status"] == "completed":
             return
         conn.execute(
-            "UPDATE withdrawal_requests SET status = 'in_progress', error = NULL WHERE request_id = ?",
+            "UPDATE withdrawal_requests SET status = 'in_progress', error = NULL WHERE request_id = ? AND status != 'completed'",
             (request_id,),
         )
         conn.commit()
@@ -476,6 +550,7 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                     "anon_subject_ref": anon_ref,
                 }
                 blobs.put_json(lab["blob_key"], clean_payload, clean_meta)
+        _deidentify_shipment_manifests(blobs, site_id=site_id, orig_subject_id=orig_subject_id, orig_mrn=orig_mrn, anon_ref=anon_ref)
 
         # 4. Outbound ePRO Spool & Dead-Letter Queue
         spool = SpoolStore(paths.outbound_queue, paths.dead_letters)
@@ -491,6 +566,13 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
         # 5. Atomic EDC relational de-id + DSMB snapshots + webhook_inbox + scheduled_jobs + Part 11 audit + complete
         with connect_edc(paths.edc_db) as conn:
             ensure_withdrawal_tables(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if current["status"] == "completed":
+                conn.rollback()
+                return
 
             _deidentify_dsmb_snapshots(
                 paths,
@@ -614,7 +696,7 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                     device_serial = NULL, ip_address = NULL, portal_url = NULL,
                     emergency_contact_name = NULL, emergency_contact_phone = NULL,
                     randomization_date = NULL, status = 'withdrawn', anon_subject_ref = ?,
-                    household_group_id = NULL, updated_at = ?
+                    household_group_id = NULL, aliases_json = '[]', updated_at = ?
                 WHERE subject_id = ?
                 """,
                 (anon_ref, new_dob, new_age, new_age_bucket, new_zip, anon_ref, now, orig_subject_id),
@@ -643,8 +725,102 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
         with connect_edc(paths.edc_db) as conn:
             ensure_withdrawal_tables(conn)
             conn.execute(
-                "UPDATE withdrawal_requests SET status = 'in_progress', completed_at = NULL, error = ? WHERE request_id = ?",
+                "UPDATE withdrawal_requests SET status = 'in_progress', completed_at = NULL, error = ? WHERE request_id = ? AND status != 'completed'",
                 (f"{type(exc).__name__}: {exc}", request_id),
             )
             conn.commit()
         raise
+
+
+def _deidentify_shipment_manifests(
+    blobs: BlobStore,
+    *,
+    site_id: str,
+    orig_subject_id: str,
+    orig_mrn: str | None,
+    anon_ref: str,
+) -> None:
+    for key in blobs.list_keys(f"labs/{site_id}/shipments/"):
+        got = blobs.get_json(key)
+        if got is None:
+            continue
+        doc, meta = got
+        changed = False
+        specimens = []
+        for sp in doc.get("specimens", []):
+            if sp.get("subject_id") == orig_subject_id or (orig_mrn and sp.get("mrn") == orig_mrn):
+                sp = {"accession_no": sp.get("accession_no"), "anon_subject_ref": anon_ref, "analyte": sp.get("analyte")}
+                changed = True
+            specimens.append(sp)
+        subject_ids = meta.get("subject_ids", [])
+        if orig_subject_id in subject_ids:
+            subject_ids = [anon_ref if s == orig_subject_id else s for s in subject_ids]
+            changed = True
+        if changed:
+            doc["specimens"] = specimens
+            meta["subject_ids"] = list(dict.fromkeys(subject_ids))
+            blobs.put_json(key, doc, meta)
+
+
+def execute_follow_up_job(paths: DataPaths, job_payload: dict[str, Any]) -> None:
+    """Stop all participant contact without de-identifying retained data."""
+    from trialvault.service import sync_subject_projections
+
+    request_id = job_payload["request_id"]
+    subject_id = job_payload["subject_id"]
+    site_id = job_payload["site_id"]
+
+    with connect_edc(paths.edc_db) as conn:
+        ensure_withdrawal_tables(conn)
+        req = conn.execute("SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)).fetchone()
+        subj = conn.execute("SELECT mrn FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
+    if req is None or req["status"] == "completed":
+        return
+    mrn = subj["mrn"] if subj else None
+
+    spool = SpoolStore(paths.outbound_queue, paths.dead_letters)
+
+    def belongs(rec: dict[str, Any]) -> bool:
+        return rec.get("subject_id") == subject_id or (bool(mrn) and rec.get("mrn") == mrn)
+
+    spool.replace_outbound([r for r in spool.read_outbound() if not belongs(r)])
+    spool.replace_dead_letters([r for r in spool.read_dead_letters() if not belongs(r)])
+
+    now = utc_now_iso()
+    with connect_edc(paths.edc_db) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)).fetchone()
+        if current["status"] == "completed":
+            conn.rollback()
+            return
+        conn.execute(
+            "UPDATE epro_notifications SET status = 'cancelled' WHERE subject_id = ? AND status = 'pending'",
+            (subject_id,),
+        )
+        conn.execute(
+            "UPDATE scheduled_jobs SET status = 'cancelled' WHERE subject_id = ? AND status = 'scheduled' AND job_type LIKE 'epro.%'",
+            (subject_id,),
+        )
+        conn.execute(
+            "UPDATE outbox_events SET status = 'suppressed' WHERE aggregate_id = ? AND event_type = 'epro.scheduled' AND status = 'pending'",
+            (subject_id,),
+        )
+        conn.execute(
+            "UPDATE subjects SET status = 'follow_up_withdrawn', updated_at = ? WHERE subject_id = ? AND status = 'active'",
+            (now, subject_id),
+        )
+        append_audit_event(
+            conn,
+            site_id=site_id,
+            actor=job_payload.get("actor", f"site:{site_id}"),
+            action="FOLLOW_UP_WITHDRAWN",
+            resource_type="withdrawal_request",
+            resource_ref=request_id,
+            structural_payload={"request_id": request_id, "scope": "follow_up_only"},
+        )
+        conn.execute(
+            "UPDATE withdrawal_requests SET status = 'completed', completed_at = ?, error = NULL WHERE request_id = ?",
+            (now, request_id),
+        )
+        conn.commit()
+    sync_subject_projections(paths, subject_id)

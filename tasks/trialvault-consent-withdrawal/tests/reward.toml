@@ -1,4 +1,4 @@
 [[reward]]
 name = "reward"
 aggregation = "weighted-mean"
-weights = { api_contract = 10.0, active_store_deid = 26.0, clinical_retention = 16.0, async_convergence = 12.0, replay_and_late_webhooks = 14.0, failure_and_recovery = 8.0, isolation_and_survivors = 10.0, baseline_health = 4.0 }
+weights = { api_contract = 9.0, active_store_deid = 24.0, clinical_retention = 14.0, async_convergence = 12.0, replay_and_late_webhooks = 12.0, failure_and_recovery = 7.0, isolation_and_survivors = 10.0, baseline_health = 2.0, withdrawal_scope = 10.0 }

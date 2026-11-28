@@ -10,12 +10,14 @@ When a participant withdraws consent, all direct and quasi-identifying Protected
 
 ### 1.1 Direct Identifiers
 Remove or null all direct identifiers across structured fields, free-text narratives, JSON payloads, document bodies, and document metadata:
-- Personal names (full name and individual name tokens in free-text narratives)
+- Personal names: the full name, each individual name token, every recorded alias in the subject's `aliases` (nicknames, maiden or prior names, and their tokens), and initials derived from the full name or a multi-word alias written in dotted form (for example `N.K.`), wherever they appear in free-text narratives
 - Contact details (email, phone, emergency contact name/phone)
 - Government and institutional identifiers (SSN, MRN)
 - Geographic subdivisions smaller than a state (street address, city)
 - Device serial numbers, IP addresses, and patient portal URLs
 - Original `subject_id` (Safe Harbor unique identifying code — must be replaced by an unlinkable opaque `anon_subject_ref` everywhere in retained records)
+
+Free-text redaction removes the identifying spans only; the surrounding clinical narrative is part of the retained clinical record and must be kept.
 
 ### 1.2 Geographic Generalization (ZIP3 Rule)
 - Street address and city must be removed; state may be retained.
@@ -30,7 +32,10 @@ Remove or null all direct identifiers across structured fields, free-text narrat
 - For participants aged 89 or younger at enrollment: generalize date of birth to the 4-digit birth year (`YYYY`), keep enrollment age, and record the age string in the age bucket.
 - For participants older than 89 at enrollment: aggregate age into `"90+"` in the age bucket, and remove both exact enrollment age and date of birth (including birth year).
 
-### 1.4 Minimal Privacy Tracking & Suppression
+### 1.4 Multi-Participant Documents
+- Some documents describe several participants at once, for example central-lab shipment manifests (`labs/{site_id}/shipments/{shipment_id}.json` and its `.meta.json`). Only the withdrawn participant's entries change: their subject reference is replaced by `anon_subject_ref`, and their MRN, name, and collection date are removed, in both the document body and the metadata (including `subject_ids`). Entries and metadata for other participants in the same document must keep every field value unchanged.
+
+### 1.5 Minimal Privacy Tracking & Suppression
 - Minimal privacy request and suppression records may store **only cryptographic SHA-256 hashes** (never plaintext) of the original `subject_id` and `mrn` to enforce idempotency, route pre-withdrawal late specimens, and suppress post-withdrawal feeds, delayed jobs, and replayed events.
 
 ---
@@ -56,5 +61,6 @@ Remove or null all direct identifiers across structured fields, free-text narrat
 
 - **Convergence before completion**: A withdrawal request may transition to `"completed"` (with non-null `completed_at`) only after every downstream store, export, archive, queue, dead-letter file, and scheduled job has been cleaned and the withdrawal audit entry has been recorded.
 - **Delayed work & replay resilience**: Scheduled future jobs and replayed historical events referencing a withdrawn participant must not reintroduce PHI into any store, cache, index, export, or outbound queue.
+- **Concurrent workers**: Several `python -m trialvault.worker --once` processes may run at the same time (overlapping cron invocations). Each withdrawal request must take effect exactly once: one `CONSENT_WITHDRAWN` audit entry per request, an audit chain that still verifies, and no request that regresses from `"completed"`.
 - **Fault recovery**: Transient downstream store errors must prevent premature `"completed"` status while preserving clinical data consistency; a subsequent worker retry after the fault clears must converge cleanly to `"completed"`.
 - **Isolation & survivors**: Multi-site tenant boundaries must be strictly enforced, and active participants—including co-enrolled household members sharing an address, postal code, emergency contact, or investigator—must remain completely unaffected.

@@ -1,4 +1,4 @@
-"""Criterion 5: Replay & Late Central-Lab Webhook Suppression (14.0% total weight, 3 checks)."""
+"""Criterion 5: Replay & Late Central-Lab Webhook Suppression (12.0% total weight, 3 checks)."""
 
 from rewardkit import criteria
 

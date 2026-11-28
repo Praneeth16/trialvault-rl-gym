@@ -64,6 +64,11 @@ export interface GeneratedRepoData {
       harbor_lint_root_agent: string;
     };
     verifier_audit_fixes: AuditFix[];
+    calibration_aggregate_v3: {
+      full_pass_runs: string;
+      full_pass_rate_pct: number;
+      mean_reward: number;
+    };
     difficulty_takeaway: string;
   };
   criteria: CriterionMeta[];

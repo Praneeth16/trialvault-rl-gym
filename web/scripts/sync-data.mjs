@@ -28,12 +28,19 @@ if (!fs.existsSync(runsDir) || !fs.existsSync(mutantsDir)) {
 }
 
 const summary = JSON.parse(fs.readFileSync(path.join(runsDir, 'summary.json'), 'utf8'));
-const runFiles = [
-  { id: 'codex-480', file: 'codex-gpt-6.2-sol_run1.json', display: 'GPT-6.2 Sol (480s)', stage: 'Pre-audit v2' },
-  { id: 'haiku-600', file: 'claude-haiku-4.5_run1.json', display: 'Claude Haiku 4.5', stage: 'Pre-audit v2' },
-  { id: 'codex-720', file: 'codex-gpt-6.2-sol-full_run1.json', display: 'GPT-6.2 Sol (720s)', stage: 'Pre-audit v2' },
-  { id: 'sonnet-669', file: 'claude-sonnet-5_run1.json', display: 'Claude Sonnet 5', stage: 'Post-audit v2' },
-];
+const labelDisplay = {
+  'claude-haiku-4.5': 'Claude Haiku 4.5',
+  'claude-sonnet-5': 'Claude Sonnet 5',
+  'codex-gpt-6.2-sol': 'GPT-6.2 Sol',
+};
+const runFiles = fs
+  .readdirSync(runsDir)
+  .filter((f) => /_run\d+\.json$/.test(f))
+  .sort()
+  .map((file) => {
+    const [label, idx] = file.replace(/\.json$/, '').split('_run');
+    return { id: `${label}-${idx}`, file, display: `${labelDisplay[label] ?? label} #${idx}`, stage: 'v3' };
+  });
 
 const runs = runFiles.map((meta) => {
   const raw = JSON.parse(fs.readFileSync(path.join(runsDir, meta.file), 'utf8'));
@@ -67,27 +74,28 @@ const runs = runFiles.map((meta) => {
 
 // Build canonical ordered list of criteria and checks from the latest run
 const canonicalCriteria = [
-  { id: 'api_contract', label: 'API contract and idempotency', weight: 10.0 },
-  { id: 'active_store_deid', label: 'Active-store HIPAA Safe Harbor', weight: 26.0 },
-  { id: 'clinical_retention', label: 'FDA 21 CFR Part 11 and retention', weight: 16.0 },
-  { id: 'async_convergence', label: 'Async convergence and queues', weight: 12.0 },
-  { id: 'replay_and_late_webhooks', label: 'Late webhooks and replay suppression', weight: 14.0 },
-  { id: 'failure_and_recovery', label: 'Transient fault recovery', weight: 8.0 },
-  { id: 'isolation_and_survivors', label: 'Site isolation, hold, and survivors', weight: 10.0 },
-  { id: 'baseline_health', label: 'Post-withdrawal baseline health', weight: 4.0 },
+  { id: 'api_contract', label: 'API contract and idempotency', weight: 9.0 },
+  { id: 'active_store_deid', label: 'Active-store HIPAA Safe Harbor', weight: 24.0 },
+  { id: 'clinical_retention', label: 'FDA 21 CFR Part 11 and retention', weight: 14.0 },
+  { id: 'async_convergence', label: 'Async convergence and concurrency', weight: 12.0 },
+  { id: 'replay_and_late_webhooks', label: 'Late webhooks and replay suppression', weight: 12.0 },
+  { id: 'failure_and_recovery', label: 'Transient fault recovery', weight: 7.0 },
+  { id: 'isolation_and_survivors', label: 'Site isolation, shared manifests, survivors', weight: 10.0 },
+  { id: 'withdrawal_scope', label: 'Follow-up-only scope and escalation', weight: 10.0 },
+  { id: 'baseline_health', label: 'Post-withdrawal baseline health', weight: 2.0 },
 ];
 
 const checkMetaList = [];
 const refRun = runs[runs.length - 1];
 for (const crit of canonicalCriteria) {
-  for (const [checkId, info] of Object.entries(refRun.checks)) {
-    if (info.criterion === crit.id) {
-      checkMetaList.push({
-        id: checkId,
-        criterion: crit.id,
-        weight: info.weight,
-      });
-    }
+  const critChecks = Object.entries(refRun.checks).filter(([, info]) => info.criterion === crit.id);
+  const critTotal = critChecks.reduce((sum, [, info]) => sum + info.weight, 0);
+  for (const [checkId, info] of critChecks) {
+    checkMetaList.push({
+      id: checkId,
+      criterion: crit.id,
+      weight: (crit.weight * info.weight) / critTotal,
+    });
   }
 }
 

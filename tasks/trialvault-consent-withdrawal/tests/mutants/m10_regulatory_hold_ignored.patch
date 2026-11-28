@@ -1,10 +1,11 @@
 --- a/trialvault/withdrawal.py
 +++ b/trialvault/withdrawal.py
-@@ -247,12 +247,6 @@
+@@ -289,13 +289,6 @@
+             raise LookupError("subject_not_found")
          if subj["site_id"] != site_id:
              raise PermissionError("cross_site_access")
- 
--        if int(subj["regulatory_hold"]) == 1:
+-
+-        if scope == "full" and int(subj["regulatory_hold"]) == 1:
 -            return 409, {
 -                "error": "blocked_regulatory_hold",
 -                "status": "blocked_regulatory_hold",
@@ -12,4 +13,4 @@
 -            }
  
          request_id = f"wd-{uuid.uuid4().hex[:12]}"
-         anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}"
+         anon_ref = f"ANON-{uuid.uuid4().hex[:12].upper()}" if scope == "full" else None

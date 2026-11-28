@@ -1,4 +1,4 @@
-"""Criterion 8: Post-Withdrawal Baseline EDC Health (4.0% total weight, 1 check)."""
+"""Criterion 8: Post-Withdrawal Baseline EDC Health (2.0% total weight, 1 check)."""
 
 from rewardkit import criteria
 

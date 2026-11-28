@@ -10,6 +10,7 @@ Build participant consent withdrawal for TrialVault.
 
 An authorized clinical site coordinator should be able to:
 - Request consent withdrawal and PHI de-identification for one of their site's enrolled subjects.
+- Record a participant who only wants to stop being contacted (no more diaries, reminders, or follow-up messages) while still allowing their data to be used, and later escalate that to a full withdrawal if the participant asks.
 - Check the status of a withdrawal request.
 - Receive a clear outcome when a withdrawal request cannot be initiated or completed (for example, an active FDA regulatory hold, missing permissions, or an unknown subject).
 - Trust that a completed withdrawal request means the subject's direct and quasi-identifying PHI has been de-identified across all active systems and queued work, and cannot be reintroduced by delayed central-lab feeds or replayed events.

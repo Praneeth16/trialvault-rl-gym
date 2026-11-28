@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -58,9 +59,13 @@ def extract_sensitive_strings(subject: dict[str, Any], dates: list[str]) -> list
         v = subject.get(key)
         if isinstance(v, str) and v.strip():
             found.add(v.strip())
-    for tok in re.split(r"\s+", (subject.get("full_name") or "").strip()):
-        if len(tok) >= 3:
-            found.add(tok)
+    for name in (subject.get("full_name") or "", *json.loads(subject.get("aliases_json") or "[]")):
+        toks = name.split()
+        if toks:
+            found.add(name.strip())
+        found.update(t for t in toks if len(t) >= 3)
+        if len(toks) > 1:
+            found.add(f"{toks[0][0]}.{toks[-1][0]}.")
     for dt in dates:
         if dt and dt.strip():
             found.add(dt.strip())

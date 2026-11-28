@@ -3,60 +3,123 @@
     "id": "m01_fts_search_retained",
     "patch": "m01_fts_search_retained.patch",
     "description": "Omits FTS5 search index deletion during withdrawal",
-    "must_fail_checks": ["fts5_search_index_clean"]
+    "must_fail_checks": [
+      "fts5_search_index_clean"
+    ]
   },
   {
     "id": "m02_cache_projection_retained",
     "patch": "m02_cache_projection_retained.patch",
     "description": "Omits subject/MRN projection cache eviction",
-    "must_fail_checks": ["projection_cache_clean"]
+    "must_fail_checks": [
+      "projection_cache_clean"
+    ]
   },
   {
     "id": "m03_restricted_zip3_unzeroed",
     "patch": "m03_restricted_zip3_unzeroed.patch",
     "description": "Truncates ZIP to 3 digits without zeroing restricted <=20k prefixes (036, 893)",
-    "must_fail_checks": ["safe_harbor_zip3_and_restricted_zeroed"]
+    "must_fail_checks": [
+      "safe_harbor_zip3_and_restricted_zeroed"
+    ]
   },
   {
     "id": "m04_age90_birthyear_leak",
     "patch": "m04_age90_birthyear_leak.patch",
     "description": "Keeps exact birth year and age_at_enrollment for subjects older than 89",
-    "must_fail_checks": ["safe_harbor_age_over_89_and_dates"]
+    "must_fail_checks": [
+      "safe_harbor_age_over_89_and_dates"
+    ]
   },
   {
     "id": "m05_cascade_delete_safety_rows",
     "patch": "m05_cascade_delete_safety_rows.patch",
     "description": "Deletes adverse event clinical rows instead of retaining de-identified records",
-    "must_fail_checks": ["safety_summary_arm_totals_preserved", "clinical_rows_retained_and_rekeyed"]
+    "must_fail_checks": [
+      "safety_summary_arm_totals_preserved",
+      "clinical_rows_retained_and_rekeyed"
+    ]
   },
   {
     "id": "m06_audit_chain_broken",
     "patch": "m06_audit_chain_broken.patch",
     "description": "Mutates an existing 21 CFR Part 11 audit_log row, breaking the SHA-256 hash chain",
-    "must_fail_checks": ["part11_audit_chain_valid"]
+    "must_fail_checks": [
+      "part11_audit_chain_valid"
+    ]
   },
   {
     "id": "m07_premature_completed_status",
     "patch": "m07_premature_completed_status.patch",
     "description": "Marks withdrawal request completed synchronously on POST before worker converges",
-    "must_fail_checks": ["post_returns_202_pending", "not_completed_before_convergence"]
+    "must_fail_checks": [
+      "post_returns_202_pending",
+      "not_completed_before_convergence"
+    ]
   },
   {
     "id": "m08_late_hl7_webhook_reintroduces_phi",
     "patch": "m08_late_hl7_webhook_reintroduces_phi.patch",
     "description": "Omits suppression check on late central-lab HL7 webhooks",
-    "must_fail_checks": ["late_hl7_webhook_suppressed"]
+    "must_fail_checks": [
+      "late_hl7_webhook_suppressed"
+    ]
   },
   {
     "id": "m09_cross_site_tenant_leak",
     "patch": "m09_cross_site_tenant_leak.patch",
     "description": "Omits site tenant ownership check on GET /v1/withdrawal-requests/{request_id}",
-    "must_fail_checks": ["cross_site_and_scope_isolation"]
+    "must_fail_checks": [
+      "cross_site_and_scope_isolation"
+    ]
   },
   {
     "id": "m10_regulatory_hold_ignored",
     "patch": "m10_regulatory_hold_ignored.patch",
     "description": "Ignores active FDA regulatory hold and accepts withdrawal instead of returning 409",
-    "must_fail_checks": ["regulatory_hold_blocks_409_no_mutation"]
+    "must_fail_checks": [
+      "regulatory_hold_blocks_409_no_mutation"
+    ]
+  },
+  {
+    "id": "m11_follow_up_scope_ignored",
+    "patch": "m11_follow_up_scope_ignored.patch",
+    "description": "Parses scope but always runs a full de-identification, so follow-up-only participants lose their identity",
+    "must_fail_checks": [
+      "follow_up_only_stops_contact_keeps_data",
+      "scope_escalation_to_full"
+    ]
+  },
+  {
+    "id": "m12_aliases_not_tokenized",
+    "patch": "m12_aliases_not_tokenized.patch",
+    "description": "Redacts the legal name but not recorded aliases (nickname, maiden name) in free text",
+    "must_fail_checks": [
+      "aliases_and_initials_redacted"
+    ]
+  },
+  {
+    "id": "m13_shipment_manifest_untouched",
+    "patch": "m13_shipment_manifest_untouched.patch",
+    "description": "Skips the multi-participant shipment manifest, leaving the withdrawn participant's MRN and name in it",
+    "must_fail_checks": [
+      "shared_shipment_manifest_scoped"
+    ]
+  },
+  {
+    "id": "m14_concurrent_double_apply",
+    "patch": "m14_concurrent_double_apply.patch",
+    "description": "Drops the locked re-check before the final transaction, so overlapping workers append CONSENT_WITHDRAWN twice",
+    "must_fail_checks": [
+      "concurrent_workers_exactly_once"
+    ]
+  },
+  {
+    "id": "m15_replayed_contact_event_delivered",
+    "patch": "m15_replayed_contact_event_delivered.patch",
+    "description": "Worker only honours full-withdrawal suppression, so a replayed ePRO event reaches a follow-up-only participant",
+    "must_fail_checks": [
+      "follow_up_only_stops_contact_keeps_data"
+    ]
   }
 ]

@@ -1,4 +1,4 @@
-"""Criterion 3: FDA 21 CFR Part 11 & GCP Clinical Retention (16.0% total weight, 4 checks)."""
+"""Criterion 3: FDA 21 CFR Part 11 & GCP Clinical Retention (14.0% total weight, 4 checks)."""
 
 from rewardkit import criteria
 

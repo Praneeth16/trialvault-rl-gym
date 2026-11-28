@@ -6,6 +6,7 @@ interface Props {
 }
 
 export function CalibrationView({ data }: Props) {
+  const total = data.summary.verifier_spec.checks_count;
   const [expandedCheck, setExpandedCheck] = useState<string | null>('blobs_and_metadata_clean');
 
   const toggleCheck = (id: string) => {
@@ -19,7 +20,9 @@ export function CalibrationView({ data }: Props) {
         <p className="section-copy">
           Each agent ran inside an isolated copy of the starter repository with only instruction.md
           and domain policy docs, then was graded across three fresh randomized-seed runs by
-          RewardKit.
+          RewardKit. Full passes: {data.summary.calibration_aggregate_v3.full_pass_runs} runs
+          {` (${data.summary.calibration_aggregate_v3.full_pass_rate_pct}%)`}, mean partial credit{' '}
+          {(data.summary.calibration_aggregate_v3.mean_reward * 100).toFixed(1)}%.
         </p>
         <div className="table-wrap">
           <table className="data-table">
@@ -45,7 +48,7 @@ export function CalibrationView({ data }: Props) {
                   </span>
                   <span className="state-fail">0.0%</span>
                 </td>
-                <td className="num">0 / 28</td>
+                <td className="num">0 / {total}</td>
               </tr>
               {data.runs.map((run) => {
                 const passed = Object.values(run.checks).filter((c) => c.score >= 1.0).length;
@@ -70,7 +73,7 @@ export function CalibrationView({ data }: Props) {
                       </span>
                       <span className={run.reward >= 1 ? 'state-pass' : 'state-warn'}>{pct}%</span>
                     </td>
-                    <td className="num">{passed} / 28</td>
+                    <td className="num">{passed} / {total}</td>
                   </tr>
                 );
               })}
@@ -88,7 +91,7 @@ export function CalibrationView({ data }: Props) {
                   </span>
                   <span className="state-pass">100.0%</span>
                 </td>
-                <td className="num">28 / 28</td>
+                <td className="num">{total} / {total}</td>
               </tr>
               <tr>
                 <td>Oracle Solution 2 (Checkpointed saga)</td>
@@ -104,7 +107,7 @@ export function CalibrationView({ data }: Props) {
                   </span>
                   <span className="state-pass">100.0%</span>
                 </td>
-                <td className="num">28 / 28</td>
+                <td className="num">{total} / {total}</td>
               </tr>
             </tbody>
           </table>
@@ -112,10 +115,10 @@ export function CalibrationView({ data }: Props) {
       </section>
 
       <section aria-label="Per-check RewardKit matrix">
-        <h2 className="section-heading">Per-check RewardKit breakdown (28 paired checks)</h2>
+        <h2 className="section-heading">Per-check RewardKit breakdown ({total} paired checks)</h2>
         <p className="section-copy">
           Select any check row to inspect exact black-box evidence strings recorded by RewardKit
-          across the four live model trajectories.
+          across all {data.runs.length} live model trajectories.
         </p>
 
         <div className="table-wrap">
@@ -208,7 +211,7 @@ export function CalibrationView({ data }: Props) {
 
       <section className="audit-grid" aria-label="Verifier audit and scaling findings">
         <div className="audit-item">
-          <h3>Two verifier bugs caught by the zero-score audit</h3>
+          <h3>{data.summary.verifier_audit_fixes.length} verifier bugs caught by the failing-check audit</h3>
           {data.summary.verifier_audit_fixes.map((fix) => (
             <p key={fix.check}>
               <strong className="mono">{fix.check}</strong>: {fix.issue_found_in_calibration}{' '}

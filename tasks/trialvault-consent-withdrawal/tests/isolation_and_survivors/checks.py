@@ -1,4 +1,4 @@
-"""Criterion 7: Multi-Site Isolation, Regulatory Hold & Survivors (10.0% total weight, 3 checks)."""
+"""Criterion 7: Multi-Site Isolation, Regulatory Hold & Survivors (10.0% total weight, 4 checks)."""
 
 from rewardkit import criteria
 
@@ -14,4 +14,7 @@ criteria.trialvault_check(
     "co_enrolled_household_survivor_untouched",
     name="co_enrolled_household_survivor_untouched",
     weight=3.0,
+)
+criteria.trialvault_check(
+    "shared_shipment_manifest_scoped", name="shared_shipment_manifest_scoped", weight=3.0
 )
