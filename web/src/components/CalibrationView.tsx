@@ -3,26 +3,59 @@ import type { GeneratedRepoData } from '../types';
 
 interface Props {
   data: GeneratedRepoData;
+  selectedSlug: string;
+  onSelectTask: (slug: string) => void;
 }
 
-export function CalibrationView({ data }: Props) {
-  const total = data.summary.verifier_spec.checks_count;
-  const [expandedCheck, setExpandedCheck] = useState<string | null>('blobs_and_metadata_clean');
+export function CalibrationView({ data, selectedSlug, onSelectTask }: Props) {
+  const activeTask = data.tasks.find((t) => t.slug === selectedSlug) ?? data.tasks[0];
+  const [expandedCheck, setExpandedCheck] = useState<string | null>(
+    activeTask?.checks[0]?.id ?? null
+  );
+
+  if (!activeTask) {
+    return null;
+  }
+
+  const total = activeTask.stats.checksCount;
 
   const toggleCheck = (id: string) => {
     setExpandedCheck((prev) => (prev === id ? null : id));
   };
 
+  const handleTaskChange = (slug: string) => {
+    onSelectTask(slug);
+    const nextTask = data.tasks.find((t) => t.slug === slug);
+    setExpandedCheck(nextTask?.checks[0]?.id ?? null);
+  };
+
   return (
     <div>
+      <div className="subtabs" role="tablist" aria-label="Select RL Gym task" style={{ marginBottom: '1.25rem' }}>
+        {data.tasks.map((t) => (
+          <button
+            key={t.slug}
+            type="button"
+            role="tab"
+            aria-selected={t.slug === activeTask.slug}
+            className="subtab"
+            onClick={() => handleTaskChange(t.slug)}
+          >
+            {t.title} ({t.stats.checksCount} checks)
+          </button>
+        ))}
+      </div>
+
       <section aria-label="Model run overview" style={{ marginBottom: '1.75rem' }}>
-        <h2 className="section-heading">Multi-model calibration summary</h2>
+        <h2 className="section-heading">
+          {activeTask.title} — multi-model calibration
+        </h2>
         <p className="section-copy">
-          Each agent ran inside an isolated copy of the starter repository with only instruction.md
-          and domain policy docs, then was graded across three fresh randomized-seed runs by
-          RewardKit. Full passes: {data.summary.calibration_aggregate_v3.full_pass_runs} runs
-          {` (${data.summary.calibration_aggregate_v3.full_pass_rate_pct}%)`}, mean partial credit{' '}
-          {(data.summary.calibration_aggregate_v3.mean_reward * 100).toFixed(1)}%.
+          Each agent ran inside an isolated copy of <span className="mono">tasks/{activeTask.slug}/environment/workspace</span>{' '}
+          with only <span className="mono">instruction.md</span> and regulatory policy docs, then was graded across three fresh
+          randomized-seed runs by RewardKit. Full passes: {activeTask.stats.fullPassRuns} runs
+          {` (${activeTask.stats.fullPassRatePct}%)`}, mean partial credit{' '}
+          {(activeTask.stats.meanReward * 100).toFixed(1)}%.
         </p>
         <div className="table-wrap">
           <table className="data-table">
@@ -50,7 +83,7 @@ export function CalibrationView({ data }: Props) {
                 </td>
                 <td className="num">0 / {total}</td>
               </tr>
-              {data.runs.map((run) => {
+              {activeTask.runs.map((run) => {
                 const passed = Object.values(run.checks).filter((c) => c.score >= 1.0).length;
                 const pct = (run.reward * 100).toFixed(1);
                 return (
@@ -73,12 +106,14 @@ export function CalibrationView({ data }: Props) {
                       </span>
                       <span className={run.reward >= 1 ? 'state-pass' : 'state-warn'}>{pct}%</span>
                     </td>
-                    <td className="num">{passed} / {total}</td>
+                    <td className="num">
+                      {passed} / {total}
+                    </td>
                   </tr>
                 );
               })}
               <tr>
-                <td>Oracle Solution 1 (Outbox ledger)</td>
+                <td>Oracle Solution 1</td>
                 <td className="mono">harbor oracle</td>
                 <td>Docker CI verified</td>
                 <td className="num">18s</td>
@@ -91,10 +126,12 @@ export function CalibrationView({ data }: Props) {
                   </span>
                   <span className="state-pass">100.0%</span>
                 </td>
-                <td className="num">{total} / {total}</td>
+                <td className="num">
+                  {total} / {total}
+                </td>
               </tr>
               <tr>
-                <td>Oracle Solution 2 (Checkpointed saga)</td>
+                <td>Oracle Solution 2</td>
                 <td className="mono">harbor oracle</td>
                 <td>Docker CI verified</td>
                 <td className="num">19s</td>
@@ -107,7 +144,9 @@ export function CalibrationView({ data }: Props) {
                   </span>
                   <span className="state-pass">100.0%</span>
                 </td>
-                <td className="num">{total} / {total}</td>
+                <td className="num">
+                  {total} / {total}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -118,7 +157,7 @@ export function CalibrationView({ data }: Props) {
         <h2 className="section-heading">Per-check RewardKit breakdown ({total} paired checks)</h2>
         <p className="section-copy">
           Select any check row to inspect exact black-box evidence strings recorded by RewardKit
-          across all {data.runs.length} live model trajectories.
+          across all {activeTask.runs.length} live model trajectories.
         </p>
 
         <div className="table-wrap">
@@ -127,7 +166,7 @@ export function CalibrationView({ data }: Props) {
               <tr>
                 <th>Criterion and check</th>
                 <th className="num">Weight</th>
-                {data.runs.map((r) => (
+                {activeTask.runs.map((r) => (
                   <th key={r.id} className="num">
                     {r.display}
                   </th>
@@ -135,14 +174,14 @@ export function CalibrationView({ data }: Props) {
               </tr>
             </thead>
             <tbody>
-              {data.criteria.map((crit) => {
-                const critChecks = data.checks.filter((c) => c.criterion === crit.id);
+              {activeTask.criteria.map((crit) => {
+                const critChecks = activeTask.checks.filter((c) => c.criterion === crit.id);
                 return (
                   <Fragment key={crit.id}>
                     <tr className="criterion-group-row">
                       <td>{crit.label}</td>
                       <td className="num">{crit.weight.toFixed(1)}%</td>
-                      {data.runs.map((r) => (
+                      {activeTask.runs.map((r) => (
                         <td key={r.id} className="num">
                           {((r.criteriaScores[crit.id] ?? 0) * 100).toFixed(0)}%
                         </td>
@@ -158,8 +197,8 @@ export function CalibrationView({ data }: Props) {
                             aria-expanded={isOpen}
                           >
                             <td className="mono">{chk.id}</td>
-                            <td className="num">{chk.weight.toFixed(1)}%</td>
-                            {data.runs.map((r) => {
+                            <td className="num">{chk.weight.toFixed(2)}%</td>
+                            {activeTask.runs.map((r) => {
                               const val = r.checks[chk.id]?.score ?? 0;
                               return (
                                 <td
@@ -173,9 +212,9 @@ export function CalibrationView({ data }: Props) {
                           </tr>
                           {isOpen && (
                             <tr className="expanded-row">
-                              <td colSpan={2 + data.runs.length}>
+                              <td colSpan={2 + activeTask.runs.length}>
                                 <div className="kv-grid">
-                                  {data.runs.map((r) => (
+                                  {activeTask.runs.map((r) => (
                                     <div key={r.id} className="kv-block">
                                       <div className="list-item-row">
                                         <strong>{r.display}</strong>
@@ -211,7 +250,7 @@ export function CalibrationView({ data }: Props) {
 
       <section className="audit-grid" aria-label="Verifier audit and scaling findings">
         <div className="audit-item">
-          <h3>{data.summary.verifier_audit_fixes.length} verifier bugs caught by the failing-check audit</h3>
+          <h3>{data.summary.verifier_audit_fixes.length} verifier artifacts caught &amp; fixed in audit</h3>
           {data.summary.verifier_audit_fixes.map((fix) => (
             <p key={fix.check}>
               <strong className="mono">{fix.check}</strong>: {fix.issue_found_in_calibration}{' '}
@@ -220,7 +259,7 @@ export function CalibrationView({ data }: Props) {
           ))}
         </div>
         <div className="audit-item">
-          <h3>Embedded stack ceiling and multi-service roadmap</h3>
+          <h3>Multi-task calibration &amp; scaling findings</h3>
           <p>{data.summary.difficulty_takeaway}</p>
         </div>
       </section>

@@ -1,0 +1,17 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -780,13 +780,7 @@
+         "narrative": str(row["narrative"]),
+     }
+ 
+-    SearchIndex(paths.search_db).upsert_case(
+-        case_uid=str(row["case_uid"]),
+-        subject_id=str(row["subject_id"]),
+-        site_id=str(row["site_id"]),
+-        trial_id=str(row["trial_id"]),
+-        content=f"{row['case_uid']} {row['subject_id']} {row['meddra_pt']} {row['narrative']}",
+-    )
++    _ = SearchIndex(paths.search_db)
+     cache = ProjectionCache(paths.cache_file)
+     cache.set(f"blinded_case:{case_uid}", blinded_view)
+     cache.delete(f"trial_blinded_summary:{row['trial_id']}")

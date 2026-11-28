@@ -46,9 +46,11 @@ def process_outbox_once(paths: DataPaths, now_iso: str | None = None) -> dict[st
         try:
             if event_type in {"subject.withdrawal_requested", "subject.follow_up_withdrawal_requested"}:
                 if event_type == "subject.withdrawal_requested":
-                    execute_withdrawal_job(paths, payload)
+                    done = execute_withdrawal_job(paths, payload)
                 else:
-                    execute_follow_up_job(paths, payload)
+                    done = execute_follow_up_job(paths, payload)
+                if not done:
+                    continue
                 with connect_edc(paths.edc_db) as conn:
                     conn.execute(
                         "UPDATE outbox_events SET status = 'processed', attempts = attempts + 1, processed_at = ?, last_error = NULL WHERE event_id = ?",

@@ -42,28 +42,31 @@ ALL_CHECK_IDS: tuple[str, ...] = (
     "projection_cache_clean",
     "blobs_and_metadata_clean",
     "aliases_and_initials_redacted",
-    # 3. clinical_retention (16.0)
+    "sdtm_warehouse_deidentified_and_retained",
+    # 3. clinical_retention
     "safety_summary_arm_totals_preserved",
     "clinical_rows_retained_and_rekeyed",
     "part11_audit_chain_valid",
     "audit_pii_purged_and_withdrawal_event_logged",
-    # 4. async_convergence (12.0)
+    # 4. async_convergence
     "not_completed_before_convergence",
     "converges_to_completed_after_worker",
     "epro_notifications_spool_and_dlq_sanitized",
     "concurrent_workers_exactly_once",
-    # 5. replay_and_late_webhooks (14.0)
+    # 5. replay_and_late_webhooks
     "late_hl7_webhook_suppressed",
     "replayed_outbox_event_suppressed",
     "active_subject_webhook_still_ingests",
-    # 6. failure_and_recovery (8.0)
+    # 6. failure_and_recovery
     "transient_fault_prevents_premature_completion",
     "retry_after_fault_converges_cleanly",
-    # 7. isolation_and_survivors (10.0)
+    "late_stage_audit_fault_recovery",
+    # 7. isolation_and_survivors
     "cross_site_and_scope_isolation",
     "regulatory_hold_blocks_409_no_mutation",
     "co_enrolled_household_survivor_untouched",
     "shared_shipment_manifest_scoped",
+    "site_monitoring_logs_and_sdv_scoped",
     # 8. baseline_health
     "existing_edc_workflows_preserved_post_withdrawal",
     # 9. withdrawal_scope
@@ -187,7 +190,9 @@ class _SeedFixture:
     acc_fault: str
     fu: dict[str, Any]
     race: dict[str, Any]
+    audit_fault: dict[str, Any]
     acc_race: str
+    acc_audit_fault: str
     shipment_id: str
     acc_tag: str
     alias_notes: dict[str, str]
@@ -364,9 +369,33 @@ def _make_fixture(run_idx: int) -> _SeedFixture:
         "randomization_date": "2026-02-25",
         "investigator_name": "Dr. Priya Raman",
     }
+    audit_fault = {
+        "subject_id": f"SUBJ-AFLT-{tag}",
+        "mrn": f"MRN-AFLT-{tag}",
+        "full_name": f"Vera Lindqvist{tag}",
+        "email": f"vera.{tag.lower()}@clinic-test.example",
+        "phone": f"+1-775-555-7{run_idx:03d}",
+        "ssn": f"88{run_idx}-99-1122",
+        "dob": "1983-03-19",
+        "age_at_enrollment": 43,
+        "street_address": f"19 Aspen Ridge {tag}",
+        "city": "Ely",
+        "state": "NV",
+        "postal_code": "89301",
+        "device_serial": f"ECG-AFLT-{tag}",
+        "ip_address": f"198.51.100.{80 + run_idx}",
+        "portal_url": f"https://portal.trialvault.example/s/{tag.lower()}-aflt",
+        "emergency_contact_name": f"Nils Lindqvist{tag}",
+        "emergency_contact_phone": f"+1-775-555-8{run_idx:03d}",
+        "treatment_arm": "DRUG_A_100MG",
+        "randomization_date": "2026-02-23",
+        "investigator_name": "Dr. Priya Raman",
+        "aliases": ["Veruschka"],
+    }
     alias_notes = {
         primary["subject_id"]: f" Prefers to be called Nadz; prior records filed under Nadia Nowak{tag}. Diary card initialled N.K.",
         survivor["subject_id"]: " Prefers to be called Tomek. Diary card initialled T.K.",
+        audit_fault["subject_id"]: " Known by nickname Veruschka.",
     }
 
     return _SeedFixture(
@@ -388,7 +417,9 @@ def _make_fixture(run_idx: int) -> _SeedFixture:
         acc_fault=f"ACC-FLT-{acc_tag}",
         fu=fu,
         race=race,
+        audit_fault=audit_fault,
         acc_race=f"ACC-RACE-{acc_tag}",
+        acc_audit_fault=f"ACC-AFLT-{acc_tag}",
         shipment_id=f"SHIP-{acc_tag}",
         acc_tag=acc_tag,
         alias_notes=alias_notes,
@@ -495,7 +526,7 @@ def _seed_via_public_api(client: httpx.Client, data_dir: Path, fx: _SeedFixture)
         conn.close()
 
     h1 = {"Authorization": f"Bearer {fx.tok_s1_full}"}
-    for subj in (fx.primary, fx.survivor, fx.elder, fx.hold, fx.fault, fx.fu, fx.race):
+    for subj in (fx.primary, fx.survivor, fx.elder, fx.hold, fx.fault, fx.fu, fx.race, fx.audit_fault):
         r = client.post("/v1/subjects", headers=h1, json=subj)
         if r.status_code != 201:
             raise RuntimeError(f"seed enroll failed for {subj['subject_id']}: {r.status_code} {r.text}")
@@ -508,6 +539,7 @@ def _seed_via_public_api(client: httpx.Client, data_dir: Path, fx: _SeedFixture)
         (fx.fault, "2026-03-08", 120, 75),
         (fx.fu, "2026-03-05", 116, 72),
         (fx.race, "2026-03-07", 128, 84),
+        (fx.audit_fault, "2026-03-06", 124, 79),
     ):
         r = client.post(
             f"/v1/subjects/{subj['subject_id']}/visits",
@@ -571,6 +603,7 @@ def _seed_via_public_api(client: httpx.Client, data_dir: Path, fx: _SeedFixture)
         (fx.hold, fx.acc_hold, "ALT", 31.0, "U/L", "2026-03-06"),
         (fx.fault, fx.acc_fault, "eGFR", 78.0, "mL/min", "2026-03-08"),
         (fx.race, fx.acc_race, "ALT", 39.0, "U/L", "2026-03-07"),
+        (fx.audit_fault, fx.acc_audit_fault, "ALT", 41.0, "U/L", "2026-03-06"),
     ):
         r = client.post(
             "/v1/webhooks/central-lab",
@@ -647,10 +680,14 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
             if pre_summary_resp.status_code != 200:
                 raise RuntimeError(f"baseline safety summary failed: {pre_summary_resp.status_code}")
             pre_summary = pre_summary_resp.json()
+            pre_sdtm_resp = client.get(f"/v1/trials/{fx.trial_id}/sdtm-summary", headers=h1)
+            if pre_sdtm_resp.status_code != 200:
+                raise RuntimeError(f"baseline sdtm summary failed: {pre_sdtm_resp.status_code}")
+            pre_sdtm = pre_sdtm_resp.json()
             client.get(f"/v1/subjects/{fx.primary['subject_id']}", headers=h1)
             client.get(f"/v1/subjects/{fx.survivor['subject_id']}", headers=h1)
 
-            _, _, pre_audit_rows = _verify_part11_chain(tmp_dir / "edc.db")
+            _, _, pre_audit_rows = _verify_part11_chain(tmp_dir / "part11_audit.db")
             pre_audit_count = len(pre_audit_rows)
 
             pri_needles = [
@@ -977,12 +1014,17 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                         json.dumps([dict(r) for r in conn.execute("SELECT subject_id, payload_json, status FROM scheduled_jobs").fetchall()]),
                         [fx.primary["subject_id"], fx.primary["mrn"], fx.primary["email"], fx.elder["subject_id"], fx.elder["mrn"]],
                     )
-                    pii_left = conn.execute(
+                finally:
+                    conn.close()
+
+                aconn = sqlite3.connect(str(tmp_dir / "part11_audit.db"))
+                try:
+                    pii_left = aconn.execute(
                         "SELECT COUNT(*) FROM audit_pii_details WHERE subject_id IN (?, ?)",
                         (fx.primary["subject_id"], fx.elder["subject_id"]),
                     ).fetchone()[0]
                 finally:
-                    conn.close()
+                    aconn.close()
 
                 # Advance worker clock past scheduled day30 followup (2026-04-15) -> survivor job fires, withdrawn subject does NOT!
                 _run_worker(workspace, tmp_dir, now_iso="2026-05-01T00:00:00+00:00")
@@ -1001,7 +1043,7 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                     "reasoning": f"db_notifs={notifs_clean}, sched_leaks={sched_leaks[:3]}, spool_leaks={spool_leaks[:3]}, surv_day30={survivor_day30_fired}",
                 }
 
-                chain_ok, chain_msg, post_audit_rows = _verify_part11_chain(tmp_dir / "edc.db")
+                chain_ok, chain_msg, post_audit_rows = _verify_part11_chain(tmp_dir / "part11_audit.db")
                 checks["part11_audit_chain_valid"] = {
                     "score": 1.0 if (chain_ok and len(post_audit_rows) >= pre_audit_count + 2) else 0.0,
                     "reasoning": f"chain_ok={chain_ok} ({chain_msg}), rows={pre_audit_count}->{len(post_audit_rows)}",
@@ -1165,6 +1207,65 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                     "reasoning": f"primary_withdrawn={pri_withdrawn}, survivor_http={surv_resp.status_code}, intact={surv_ok}",
                 }
 
+                # Store 5: CDISC SDTM Warehouse (`cdisc_sdtm.db`)
+                post_sdtm_resp = client.get(f"/v1/trials/{fx.trial_id}/sdtm-summary", headers=h1)
+                post_sdtm = _json(post_sdtm_resp) if post_sdtm_resp.status_code == 200 else {}
+                wconn = sqlite3.connect(str(tmp_dir / "cdisc_sdtm.db"))
+                wconn.row_factory = sqlite3.Row
+                try:
+                    dm_rows = [dict(r) for r in wconn.execute("SELECT * FROM sdtm_dm").fetchall()]
+                    sv_rows = [dict(r) for r in wconn.execute("SELECT * FROM sdtm_sv").fetchall()]
+                    ae_sdtm_rows = [dict(r) for r in wconn.execute("SELECT * FROM sdtm_ae").fetchall()]
+                    lb_sdtm_rows = [dict(r) for r in wconn.execute("SELECT * FROM sdtm_lb").fetchall()]
+                    supp_rows = [dict(r) for r in wconn.execute("SELECT * FROM sdtm_suppqual").fetchall()]
+                finally:
+                    wconn.close()
+                sdtm_dump = json.dumps([dm_rows, sv_rows, ae_sdtm_rows, lb_sdtm_rows, supp_rows])
+                sdtm_leaks = _contains_any(sdtm_dump, pri_needles + eld_needles + alias_tokens)
+                dm_pri = next((r for r in dm_rows if r.get("usubjid") == anon_pri), None)
+                dm_eld = next((r for r in dm_rows if r.get("usubjid") == anon_eld), None)
+                dm_surv = next((r for r in dm_rows if r.get("usubjid") == fx.survivor["subject_id"]), None)
+                sv_pri = [r for r in sv_rows if r.get("usubjid") == anon_pri]
+                sdtm_phase_b_ok = (
+                    pri_withdrawn
+                    and post_sdtm_resp.status_code == 200
+                    and post_sdtm == pre_sdtm
+                    and not sdtm_leaks
+                    and dm_pri is not None and dm_pri.get("postal_code") == "021" and dm_pri.get("rfstdtc") is None and dm_pri.get("armcd") == "DRUG_A_100MG"
+                    and dm_eld is not None and dm_eld.get("postal_code") == "000" and dm_eld.get("age") is None and dm_eld.get("age_bucket") == "90+" and dm_eld.get("brthdtc") is None
+                    and dm_surv is not None and dm_surv.get("fullname") == fx.survivor["full_name"]
+                    and len(sv_pri) == 1 and sv_pri[0].get("svstdtc") is None and "Stable hemodynamics" in (sv_pri[0].get("coval") or "")
+                )
+                checks["sdtm_warehouse_deidentified_and_retained"] = {
+                    "score": 1.0 if sdtm_phase_b_ok else 0.0,
+                    "reasoning": f"summary_match={post_sdtm == pre_sdtm}, leaks={sdtm_leaks[:3]}, dm_pri={dm_pri is not None}, dm_eld={dm_eld is not None}, dm_surv={dm_surv is not None}",
+                }
+
+                # Store 6: Site Monitoring Enrollment Log (signed SHA-256) & CRA SDV Worklist
+                enr_resp = client.get(f"/v1/sites/{fx.site1_id}/enrollment-log", headers=h1)
+                enr_data = _json(enr_resp) if enr_resp.status_code == 200 else {}
+                enr_entries = enr_data.get("log", {}).get("entries", [])
+                enr_pri = next((e for e in enr_entries if e.get("subject_id") == anon_pri or e.get("anon_subject_ref") == anon_pri), None)
+                enr_eld = next((e for e in enr_entries if e.get("subject_id") == anon_eld or e.get("anon_subject_ref") == anon_eld), None)
+                enr_surv = next((e for e in enr_entries if e.get("subject_id") == fx.survivor["subject_id"]), None)
+                sdv_path = tmp_dir / "monitoring" / fx.site1_id / "cra_sdv_worklist.jsonl"
+                sdv_raw = sdv_path.read_text(encoding="utf-8") if sdv_path.exists() else ""
+                mon_leaks = _contains_any(json.dumps(enr_entries) + "\n" + sdv_raw, pri_needles + eld_needles + alias_tokens)
+                mon_ok = (
+                    pri_withdrawn
+                    and enr_resp.status_code == 200
+                    and enr_data.get("checksum_valid") is True
+                    and not mon_leaks
+                    and enr_pri is not None and enr_pri.get("postal_code") == "021" and enr_pri.get("randomization_date") is None
+                    and enr_eld is not None and enr_eld.get("postal_code") == "000" and enr_eld.get("age_bucket") == "90+" and enr_eld.get("dob") is None
+                    and enr_surv is not None and enr_surv.get("full_name") == fx.survivor["full_name"] and enr_surv.get("mrn") == fx.survivor["mrn"]
+                    and "Stable hemodynamics" in sdv_raw and fx.survivor["subject_id"] in sdv_raw and fx.survivor["full_name"] in sdv_raw
+                )
+                checks["site_monitoring_logs_and_sdv_scoped"] = {
+                    "score": 1.0 if mon_ok else 0.0,
+                    "reasoning": f"enr_http={enr_resp.status_code}, sha_valid={enr_data.get('checksum_valid')}, leaks={mon_leaks[:3]}, surv_intact={enr_surv is not None}",
+                }
+
             with _Phase(checks, "phase c"):
                 # ------------------------------------------------------------------
                 # PHASE C: FDA 2008 Pre-vs-Post Withdrawal Specimen Boundary + Replay Suppression
@@ -1242,6 +1343,27 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                     "score": 1.0 if fda_boundary_ok else 0.0,
                     "reasoning": f"post_wh={late_post_wh.status_code}, pre_wh={late_pre_wh.status_code}/{late_pre_wh.text[:100]}, pre_blob_clean={pre_blob_clean}",
                 }
+
+                # Verify late pre-withdrawal lab also updated SDTM warehouse without leaking PHI or post-withdrawal lab
+                sdtm_after_pre = _json(client.get(f"/v1/trials/{fx.trial_id}/sdtm-summary", headers=h1))
+                wconn = sqlite3.connect(str(tmp_dir / "cdisc_sdtm.db"))
+                wconn.row_factory = sqlite3.Row
+                try:
+                    sdtm_pre_lb = wconn.execute("SELECT * FROM sdtm_lb WHERE lbrefid = ?", (late_pre_acc,)).fetchone()
+                    sdtm_post_cnt = wconn.execute("SELECT COUNT(*) FROM sdtm_lb WHERE lbrefid = ?", (late_post_acc,)).fetchone()[0]
+                finally:
+                    wconn.close()
+                if checks["sdtm_warehouse_deidentified_and_retained"]["score"] == 1.0:
+                    sdtm_late_ok = (
+                        sdtm_after_pre.get("lb_count") == pre_sdtm.get("lb_count", -9) + 1
+                        and sdtm_pre_lb is not None and sdtm_pre_lb["usubjid"] == anon_pri and sdtm_pre_lb["lbdtc"] is None
+                        and sdtm_post_cnt == 0
+                    )
+                    if not sdtm_late_ok:
+                        checks["sdtm_warehouse_deidentified_and_retained"] = {
+                            "score": 0.0,
+                            "reasoning": f"SDTM late-lab mismatch: lb_count={sdtm_after_pre.get('lb_count')} (expected {pre_sdtm.get('lb_count', -9) + 1}), pre_lb={dict(sdtm_pre_lb) if sdtm_pre_lb else None}, post_cnt={sdtm_post_cnt}",
+                        }
 
                 ship_path = tmp_dir / "blobs" / "labs" / fx.site1_id / "shipments" / f"{fx.shipment_id}.json"
                 ship_meta_path = ship_path.parent / f"{ship_path.name}.meta.json"
@@ -1416,6 +1538,86 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                         "reasoning": f"post-recovery: status={body_after_rec.get('status')}, zip={flt_row['postal_code'] if flt_row else None}",
                     }
 
+                # Late-stage cross-DB fault: part11_audit.db fails AFTER downstream stores commit!
+                aflt = fx.audit_fault
+                post_aflt = client.post(
+                    f"/v1/subjects/{aflt['subject_id']}/withdrawal-requests",
+                    headers={**h1, "Idempotency-Key": f"idem-aflt-{fx.trial_id}"},
+                    json={"reason": "cross_db_audit_fault_test", "effective_date": eff_date},
+                )
+                req_aflt_id = _json(post_aflt).get("request_id") if post_aflt.status_code == 202 else None
+                anon_aflt = _json(post_aflt).get("anon_subject_ref") if post_aflt.status_code == 202 else None
+                if req_aflt_id:
+                    aconn = sqlite3.connect(str(tmp_dir / "part11_audit.db"))
+                    try:
+                        aconn.execute(
+                            """
+                            CREATE TRIGGER tv_simulate_audit_outage
+                            BEFORE INSERT ON audit_log
+                            BEGIN
+                                SELECT RAISE(ABORT, 'simulated_part11_ledger_outage');
+                            END;
+                            """
+                        )
+                        aconn.commit()
+                    finally:
+                        aconn.close()
+
+                    try:
+                        _run_worker(workspace, tmp_dir, now_iso="2026-03-10T12:20:00+00:00")
+                        during_aflt = _json(client.get(f"/v1/withdrawal-requests/{req_aflt_id}", headers=h1))
+                        aflt_blocked = during_aflt.get("status") != "completed" and during_aflt.get("completed_at") is None
+                    finally:
+                        aconn = sqlite3.connect(str(tmp_dir / "part11_audit.db"))
+                        try:
+                            aconn.execute("DROP TRIGGER IF EXISTS tv_simulate_audit_outage")
+                            aconn.commit()
+                        finally:
+                            aconn.close()
+
+                    w_aflt_rec = _run_worker(workspace, tmp_dir, now_iso="2026-03-10T12:25:00+00:00")
+                    after_aflt = _json(client.get(f"/v1/withdrawal-requests/{req_aflt_id}", headers=h1))
+                    anon_aflt = after_aflt.get("anon_subject_ref") or anon_aflt
+                    aflt_orig_get = client.get(f"/v1/subjects/{aflt['subject_id']}", headers=h1)
+                    aflt_anon_get = client.get(f"/v1/subjects/{anon_aflt}", headers=h1) if anon_aflt else None
+                    aflt_chain_ok, _, aflt_audit_rows = _verify_part11_chain(tmp_dir / "part11_audit.db")
+                    aflt_wd_cnt = sum(1 for r in aflt_audit_rows if r["action"] == "CONSENT_WITHDRAWN" and r["resource_ref"] == anon_aflt)
+
+                    wconn = sqlite3.connect(str(tmp_dir / "cdisc_sdtm.db"))
+                    try:
+                        aflt_sdtm_dump = json.dumps(
+                            wconn.execute("SELECT * FROM sdtm_dm WHERE usubjid IN (?, ?)", (aflt["subject_id"], anon_aflt)).fetchall()
+                            + wconn.execute("SELECT * FROM sdtm_sv WHERE usubjid IN (?, ?)", (aflt["subject_id"], anon_aflt)).fetchall()
+                            + wconn.execute("SELECT * FROM sdtm_suppqual WHERE usubjid IN (?, ?)", (aflt["subject_id"], anon_aflt)).fetchall()
+                        )
+                    finally:
+                        wconn.close()
+                    enr_after_aflt = _json(client.get(f"/v1/sites/{fx.site1_id}/enrollment-log", headers=h1))
+                    aflt_needles = [aflt["subject_id"], aflt["mrn"], aflt["full_name"], aflt["email"], "Veruschka"]
+                    aflt_leaks = _contains_any(
+                        json.dumps(_json(aflt_anon_get)) + aflt_sdtm_dump + json.dumps(enr_after_aflt.get("log", {})),
+                        aflt_needles,
+                    )
+                    aflt_ok = (
+                        aflt_blocked
+                        and w_aflt_rec.returncode == 0
+                        and after_aflt.get("status") == "completed"
+                        and bool(after_aflt.get("completed_at"))
+                        and aflt_orig_get.status_code == 404
+                        and aflt_anon_get is not None and aflt_anon_get.status_code == 200
+                        and _json(aflt_anon_get).get("postal_code") == "000"
+                        and aflt_chain_ok and aflt_wd_cnt == 1
+                        and enr_after_aflt.get("checksum_valid") is True
+                        and not aflt_leaks
+                    )
+                    checks["late_stage_audit_fault_recovery"] = {
+                        "score": 1.0 if aflt_ok else 0.0,
+                        "reasoning": (
+                            f"blocked_during_fault={aflt_blocked}, after_status={after_aflt.get('status')}, "
+                            f"orig_http={aflt_orig_get.status_code}, wd_cnt={aflt_wd_cnt}, leaks={aflt_leaks[:3]}"
+                        ),
+                    }
+
             with _Phase(checks, "phase e"):
                 # ------------------------------------------------------------------
                 # PHASE E: Post-Withdrawal Baseline Health
@@ -1437,7 +1639,7 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                 )
                 _run_worker(workspace, tmp_dir, now_iso="2026-03-25T12:00:00+00:00")
                 post_search = client.get("/v1/subjects/search?q=Iris", headers=h1)
-                final_chain_ok, _, _ = _verify_part11_chain(tmp_dir / "edc.db")
+                final_chain_ok, _, _ = _verify_part11_chain(tmp_dir / "part11_audit.db")
                 baseline_ok = (
                     converged_ok
                     and post_enroll.status_code == 201
@@ -1590,12 +1792,12 @@ def _run_single_trial(workspace: Path, run_idx: int) -> dict[str, dict[str, Any]
                 )
                 race_body = _json(post_race)
                 race_req = race_body.get("request_id")
-                _, _, rows_before = _verify_part11_chain(tmp_dir / "edc.db")
+                _, _, rows_before = _verify_part11_chain(tmp_dir / "part11_audit.db")
                 wd_before = sum(1 for r in rows_before if r["action"] == "CONSENT_WITHDRAWN")
                 race_runs = _run_workers_concurrently(workspace, tmp_dir, n=4, now_iso="2026-06-03T00:00:00+00:00")
                 race_get = _json(client.get(f"/v1/withdrawal-requests/{race_req}", headers=h1))
                 anon_race = race_get.get("anon_subject_ref") or race_body.get("anon_subject_ref")
-                race_chain_ok, race_chain_msg, rows_after = _verify_part11_chain(tmp_dir / "edc.db")
+                race_chain_ok, race_chain_msg, rows_after = _verify_part11_chain(tmp_dir / "part11_audit.db")
                 wd_delta = sum(1 for r in rows_after if r["action"] == "CONSENT_WITHDRAWN") - wd_before
                 conn = sqlite3.connect(str(tmp_dir / "edc.db"))
                 try:

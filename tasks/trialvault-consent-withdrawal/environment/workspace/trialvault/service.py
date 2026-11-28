@@ -8,13 +8,20 @@ import sqlite3
 import uuid
 from typing import Any
 
-from trialvault.audit import append_audit_event
+from trialvault.audit import record_audit_entry
 from trialvault.blobs import BlobStore
 from trialvault.cache import ProjectionCache
 from trialvault.config import DataPaths
 from trialvault.db import connect_edc, utc_now_iso
+from trialvault.monitoring.sdv_feed import append_enrollment_log_entry, append_sdv_item
 from trialvault.search import SearchIndex
 from trialvault.spool import SpoolStore
+from trialvault.warehouse.sdtm import (
+    record_sdtm_ae,
+    record_sdtm_lab,
+    record_sdtm_subject,
+    record_sdtm_visit,
+)
 
 
 def opaque_audit_ref(prefix: str, raw_id: str) -> str:
@@ -218,30 +225,6 @@ def enroll_subject(
                 now,
             ),
         )
-        append_audit_event(
-            conn,
-            site_id=site_id,
-            actor=actor,
-            action="SUBJECT_ENROLLED",
-            resource_type="subject",
-            resource_ref=opaque_audit_ref("subj", subject_id),
-            structural_payload={
-                "trial_id": trial_id,
-                "treatment_arm": data["treatment_arm"],
-                "regulatory_hold": bool(data.get("regulatory_hold")),
-            },
-            pii_subject_id=subject_id,
-            pii_detail={
-                "subject_id": subject_id,
-                "mrn": data["mrn"],
-                "full_name": data["full_name"],
-                "email": data["email"],
-                "phone": data["phone"],
-                "ssn": data["ssn"],
-                "dob": data["dob"],
-                "street_address": data["street_address"],
-            },
-        )
         enqueue_outbox(
             conn,
             event_type="subject.enrolled",
@@ -273,6 +256,33 @@ def enroll_subject(
         )
         conn.commit()
         row = dict(conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone())
+
+    record_audit_entry(
+        paths,
+        site_id=site_id,
+        actor=actor,
+        action="SUBJECT_ENROLLED",
+        resource_type="subject",
+        resource_ref=opaque_audit_ref("subj", subject_id),
+        structural_payload={
+            "trial_id": trial_id,
+            "treatment_arm": data["treatment_arm"],
+            "regulatory_hold": bool(data.get("regulatory_hold")),
+        },
+        pii_subject_id=subject_id,
+        pii_detail={
+            "subject_id": subject_id,
+            "mrn": data["mrn"],
+            "full_name": data["full_name"],
+            "email": data["email"],
+            "phone": data["phone"],
+            "ssn": data["ssn"],
+            "dob": data["dob"],
+            "street_address": data["street_address"],
+        },
+    )
+    record_sdtm_subject(paths, trial_id=trial_id, site_id=site_id, subject_row=row)
+    append_enrollment_log_entry(paths, site_id=site_id, trial_id=trial_id, subject_row=row)
 
     blobs = BlobStore(paths.blobs_dir)
     blobs.put_json(
@@ -338,20 +348,6 @@ def record_visit(
                 metadata_json,
             ),
         )
-        append_audit_event(
-            conn,
-            site_id=site_id,
-            actor=actor,
-            action="VISIT_RECORDED",
-            resource_type="visit",
-            resource_ref=opaque_audit_ref("visit", visit_id),
-            structural_payload={
-                "visit_number": int(data["visit_number"]),
-                "days_from_randomization": int(data["days_from_randomization"]),
-            },
-            pii_subject_id=subject_id,
-            pii_detail={"subject_id": subject_id, "visit_date": data["visit_date"], "notes": data["clinical_notes"]},
-        )
         enqueue_outbox(
             conn,
             event_type="visit.recorded",
@@ -365,7 +361,45 @@ def record_visit(
             },
         )
         conn.commit()
-        return dict(conn.execute("SELECT * FROM visits WHERE visit_id = ?", (visit_id,)).fetchone())
+        visit_row = dict(conn.execute("SELECT * FROM visits WHERE visit_id = ?", (visit_id,)).fetchone())
+        subj_dict = dict(subj)
+
+    record_audit_entry(
+        paths,
+        site_id=site_id,
+        actor=actor,
+        action="VISIT_RECORDED",
+        resource_type="visit",
+        resource_ref=opaque_audit_ref("visit", visit_id),
+        structural_payload={
+            "visit_number": int(data["visit_number"]),
+            "days_from_randomization": int(data["days_from_randomization"]),
+        },
+        pii_subject_id=subject_id,
+        pii_detail={"subject_id": subject_id, "visit_date": data["visit_date"], "notes": data["clinical_notes"]},
+    )
+    record_sdtm_visit(
+        paths,
+        trial_id=subj_dict["trial_id"],
+        site_id=site_id,
+        subject_id=subject_id,
+        visit_row=visit_row,
+    )
+    append_sdv_item(
+        paths,
+        site_id,
+        {
+            "item_type": "visit",
+            "ref_id": visit_id,
+            "subject_id": subject_id,
+            "mrn": subj_dict.get("mrn"),
+            "patient_name": subj_dict.get("full_name"),
+            "study_day": int(data["days_from_randomization"]),
+            "recorded_date": data["visit_date"],
+            "note": data["clinical_notes"],
+        },
+    )
+    return visit_row
 
 
 def record_adverse_event(
@@ -425,21 +459,6 @@ def record_adverse_event(
                 now,
             ),
         )
-        append_audit_event(
-            conn,
-            site_id=site_id,
-            actor=actor,
-            action="ADVERSE_EVENT_RECORDED",
-            resource_type="adverse_event",
-            resource_ref=opaque_audit_ref("ae", ae_id),
-            structural_payload={
-                "meddra_term": data["meddra_term"],
-                "ctcae_grade": int(data["ctcae_grade"]),
-                "serious": bool(data.get("serious")),
-            },
-            pii_subject_id=subject_id,
-            pii_detail={"subject_id": subject_id, "onset_date": data["onset_date"], "reporter_notes": data["reporter_notes"]},
-        )
         enqueue_outbox(
             conn,
             event_type="ae.recorded",
@@ -455,6 +474,44 @@ def record_adverse_event(
         )
         conn.commit()
         row = dict(conn.execute("SELECT * FROM adverse_events WHERE ae_id = ?", (ae_id,)).fetchone())
+        subj_dict = dict(subj)
+
+    record_audit_entry(
+        paths,
+        site_id=site_id,
+        actor=actor,
+        action="ADVERSE_EVENT_RECORDED",
+        resource_type="adverse_event",
+        resource_ref=opaque_audit_ref("ae", ae_id),
+        structural_payload={
+            "meddra_term": data["meddra_term"],
+            "ctcae_grade": int(data["ctcae_grade"]),
+            "serious": bool(data.get("serious")),
+        },
+        pii_subject_id=subject_id,
+        pii_detail={"subject_id": subject_id, "onset_date": data["onset_date"], "reporter_notes": data["reporter_notes"]},
+    )
+    record_sdtm_ae(
+        paths,
+        trial_id=subj_dict["trial_id"],
+        site_id=site_id,
+        subject_id=subject_id,
+        ae_row=row,
+    )
+    append_sdv_item(
+        paths,
+        site_id,
+        {
+            "item_type": "adverse_event",
+            "ref_id": ae_id,
+            "subject_id": subject_id,
+            "mrn": subj_dict.get("mrn"),
+            "patient_name": subj_dict.get("full_name"),
+            "study_day": int(data["onset_study_day"]),
+            "recorded_date": data["onset_date"],
+            "note": data["reporter_notes"],
+        },
+    )
     ProjectionCache(paths.cache_file).delete(f"trial:{row['trial_id']}:safety_summary")
     return row
 
@@ -615,26 +672,6 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
                 blob_key,
             ),
         )
-        append_audit_event(
-            conn,
-            site_id=site_id,
-            actor="central-lab-webhook",
-            action="LAB_RESULT_INGESTED",
-            resource_type="lab_result",
-            resource_ref=opaque_audit_ref("lab", accession_no),
-            structural_payload={
-                "analyte": payload["analyte"],
-                "study_day": int(payload["study_day"]),
-                "reference_flag": payload.get("reference_flag", "NORMAL"),
-            },
-            pii_subject_id=resolved_subject_id,
-            pii_detail={
-                "subject_id": resolved_subject_id,
-                "mrn": mrn or subj["mrn"],
-                "patient_name": raw_hl7["PID"]["patient_name"],
-                "collected_date": payload["collected_date"],
-            },
-        )
         enqueue_outbox(
             conn,
             event_type="lab.received",
@@ -651,6 +688,42 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
             },
         )
         conn.commit()
+        eff_mrn = mrn or subj["mrn"]
+
+    record_audit_entry(
+        paths,
+        site_id=site_id,
+        actor="central-lab-webhook",
+        action="LAB_RESULT_INGESTED",
+        resource_type="lab_result",
+        resource_ref=opaque_audit_ref("lab", accession_no),
+        structural_payload={
+            "analyte": payload["analyte"],
+            "study_day": int(payload["study_day"]),
+            "reference_flag": payload.get("reference_flag", "NORMAL"),
+        },
+        pii_subject_id=resolved_subject_id,
+        pii_detail={
+            "subject_id": resolved_subject_id,
+            "mrn": eff_mrn,
+            "patient_name": raw_hl7["PID"]["patient_name"],
+            "collected_date": payload["collected_date"],
+        },
+    )
+    record_sdtm_lab(
+        paths,
+        trial_id=trial_id,
+        site_id=site_id,
+        subject_id=resolved_subject_id,
+        lab_id=lab_id,
+        accession_no=accession_no,
+        analyte=payload["analyte"],
+        value_num=float(payload["value_num"]),
+        unit=payload["unit"],
+        reference_flag=payload.get("reference_flag", "NORMAL"),
+        collected_date=payload["collected_date"],
+        study_day=int(payload["study_day"]),
+    )
 
     blobs = BlobStore(paths.blobs_dir)
     blobs.put_json(

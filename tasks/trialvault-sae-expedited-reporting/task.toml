@@ -1,0 +1,41 @@
+schema_version = "1.4"
+artifacts = ["/app"]
+
+[task]
+name = "praneeth16/trialvault-sae-expedited-reporting"
+description = "Implement FDA 21 CFR 312.32 expedited IND safety (SUSAR) reporting, ICH E9 selective unblinding, and 21 CFR Part 11 audit integrity across a blinded clinical trial pharmacovigilance platform."
+authors = [{ name = "Praneeth Paikray", email = "paiky1995@gmail.com" }]
+keywords = [
+    "hls",
+    "healthcare",
+    "clinical-trials",
+    "pharmacovigilance",
+    "fda-21-cfr-312",
+    "21-cfr-part-11",
+    "backend",
+    "distributed-systems",
+]
+
+[metadata]
+category = "healthcare-life-sciences"
+difficulty = "hard"
+difficulty_explanation = "Combines 6 interacting clinical pharmacovigilance invariants: 3-legged SUSAR triage against time-effective Reference Safety Information (RSI), ICH E9 selective IWRS unblinding with strict site blinding across projections/search/listings, FDA 21 CFR 312.32 Day-0 threshold anchoring and pre-submission 15d-to-7d retroactive tightening, post-submission follow-up vs benign amendment discrimination, FDA gateway NACK/OS/audit-trigger fault recovery, and multi-worker exactly-once concurrency."
+
+[metadata.harbor.lint]
+extend-select = ["root-agent"]
+
+[agent]
+timeout_sec = 1800.0
+user = "agent"
+
+[environment]
+network_mode = "no-network"
+cpus = 2
+memory_mb = 4096
+storage_mb = 8192
+workdir = "/app"
+
+[verifier]
+environment_mode = "separate"
+network_mode = "no-network"
+timeout_sec = 300.0

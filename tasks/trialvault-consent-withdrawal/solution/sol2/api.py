@@ -12,6 +12,7 @@ from trialvault.cache import ProjectionCache
 from trialvault.config import DataPaths, get_data_paths
 from trialvault.db import connect_edc, init_edc_db, lookup_site_by_token
 from trialvault.exports import generate_dsmb_snapshot, read_dsmb_snapshot
+from trialvault.monitoring.sdv_feed import read_site_enrollment_log
 from trialvault.queries import list_subject_queries, open_data_query
 from trialvault.saga_engine import (
     ContactWithdrawnError,
@@ -28,6 +29,7 @@ from trialvault.service import (
     record_visit,
     schedule_epro_reminder,
 )
+from trialvault.warehouse.sdtm import compute_sdtm_summary
 
 
 def _paths() -> DataPaths:
@@ -319,3 +321,24 @@ def api_safety_summary(trial_id: str, site: dict[str, Any] = Depends(get_current
         return compute_safety_summary(_paths(), trial_id)
     except LookupError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="trial_not_found")
+
+
+@app.get("/v1/trials/{trial_id}/sdtm-summary")
+def api_sdtm_summary(trial_id: str, site: dict[str, Any] = Depends(get_current_site)) -> dict[str, Any]:
+    require_scope(site, "edc:read")
+    try:
+        return compute_sdtm_summary(_paths(), trial_id)
+    except LookupError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="trial_not_found")
+
+
+@app.get("/v1/sites/{site_id}/enrollment-log")
+def api_site_enrollment_log(site_id: str, site: dict[str, Any] = Depends(get_current_site)) -> dict[str, Any]:
+    require_scope(site, "edc:read")
+    if site_id != site["site_id"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="cross_site_access")
+    try:
+        return read_site_enrollment_log(_paths(), site_id)
+    except LookupError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="enrollment_log_not_found")
+

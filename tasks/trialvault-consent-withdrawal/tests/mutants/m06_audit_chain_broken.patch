@@ -1,13 +1,10 @@
 --- a/trialvault/withdrawal.py
 +++ b/trialvault/withdrawal.py
-@@ -591,8 +591,9 @@
-                 (anon_ref, json.dumps({"cancelled": True, "anon_subject_ref": anon_ref}), orig_subject_id),
-             )
- 
--            # Purge participant PII from audit_pii_details (never touch existing audit_log rows!)
-+            # Purge participant PII from audit_pii_details
-             conn.execute("DELETE FROM audit_pii_details WHERE subject_id = ?", (orig_subject_id,))
-+            conn.execute("UPDATE audit_log SET actor = 'redacted' WHERE seq_id = 1")
- 
-             # Scrub historical outbox rows for this subject
-             conn.execute(
+@@ -729,6 +729,7 @@
+         init_audit_db(paths)
+         with connect_audit(paths.audit_db) as audit_conn:
+             audit_conn.execute("BEGIN IMMEDIATE")
++            audit_conn.execute("UPDATE audit_log SET actor = 'redacted' WHERE seq_id = 1")
+             audit_conn.execute("DELETE FROM audit_pii_details WHERE subject_id IN (?, ?)", (orig_subject_id, anon_ref))
+             already_logged = audit_conn.execute(
+                 "SELECT 1 FROM audit_log WHERE action = 'CONSENT_WITHDRAWN' AND resource_ref = ?",

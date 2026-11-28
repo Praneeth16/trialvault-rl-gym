@@ -1,7 +1,8 @@
-"""Verifier self-tests: boundary scores (starter=0.0, sol1=1.0, sol2=1.0) and 15/15 mutant kills."""
+"""Verifier self-tests: boundary scores (starter=0.0, sol1=1.0, sol2=1.0) and 18/18 mutant kills."""
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -17,8 +18,12 @@ SOLUTION_SH = TASK_DIR / "solution" / "solve.sh"
 TESTS_DIR = TASK_DIR / "tests"
 MUTANTS_DIR = TESTS_DIR / "mutants"
 
-sys.path.insert(0, str(TESTS_DIR))
-from harness import evaluate_workspace  # noqa: E402
+_SPEC = importlib.util.spec_from_file_location("cw_harness", TESTS_DIR / "harness.py")
+assert _SPEC and _SPEC.loader
+_MOD = importlib.util.module_from_spec(_SPEC)
+sys.modules["cw_harness"] = _MOD
+_SPEC.loader.exec_module(_MOD)
+evaluate_workspace = _MOD.evaluate_workspace
 
 
 def _make_workspace(tmp_path: Path, solution_variant: str | None = None) -> Path:

@@ -1,11 +1,13 @@
 --- a/trialvault/withdrawal.py
 +++ b/trialvault/withdrawal.py
-@@ -439,7 +439,7 @@
+@@ -631,9 +631,7 @@
+     now = utc_now_iso()
  
      try:
-         # 1. SQLite FTS5 Search Index
+-        # 1. SQLite FTS5 Search Index
 -        SearchIndex(paths.search_db).delete_subject(orig_subject_id)
-+        _ = SearchIndex(paths.search_db)
+-        SearchIndex(paths.search_db).delete_subject(anon_ref)
++        # 1. SQLite FTS5 Search Index (BUG: omitted)
  
          # 2. Projection Cache
          cache = ProjectionCache(paths.cache_file)

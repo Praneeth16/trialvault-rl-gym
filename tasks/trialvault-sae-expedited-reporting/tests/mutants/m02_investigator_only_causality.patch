@@ -1,0 +1,13 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -230,9 +230,7 @@
+     is_serious = bool(merged["is_serious"])
+     inv_c = str(merged["investigator_causality"])
+     spon_c = merged["sponsor_causality"]
+-    is_suspected = (inv_c in CAUSALITY_SUSPECTED) or (
+-        spon_c is not None and str(spon_c) in CAUSALITY_SUSPECTED
+-    )
++    is_suspected = inv_c in CAUSALITY_SUSPECTED
+     ib_ver = _lookup_governing_ib(paths, trial_id, initial_aware_at)
+     is_unexpected = _check_unexpected(
+         paths,

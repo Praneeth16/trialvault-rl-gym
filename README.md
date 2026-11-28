@@ -2,38 +2,34 @@
 
 [![TrialVault RL Gym CI](https://github.com/Praneeth16/trialvault-rl-gym/actions/workflows/ci.yml/badge.svg)](https://github.com/Praneeth16/trialvault-rl-gym/actions/workflows/ci.yml)
 
-A **Harbor v1.4 + RewardKit** RLVR (Reinforcement Learning with Verifiable Rewards) brownfield software-engineering environment for **Healthcare & Life Sciences (HLS)**.
+A **multi-task Harbor v1.4 + RewardKit** RLVR (Reinforcement Learning with Verifiable Rewards) brownfield software-engineering gym for **Healthcare & Life Sciences (HLS)** clinical trial platforms.
 
-`TrialVault` is a multi-site Phase III Clinical Trial Electronic Data Capture (EDC) backend. The task (`trialvault-consent-withdrawal`) asks an autonomous coding agent to implement participant consent withdrawal (`POST /v1/subjects/{subject_id}/withdrawal-requests` and `GET /v1/withdrawal-requests/{request_id}`) under two competing regulatory regimes:
-- **HIPAA Safe Harbor De-Identification (45 CFR §164.514(b)(2))**
-- **FDA Good Clinical Practice (GCP) & 21 CFR Part 11 Electronic Record Integrity**
+`TrialVault RL Gym` ships **two orthogonal clinical regulatory tasks** (**66 paired black-box checks** across **17 weighted criteria**, **4 independent oracle architectures**, **30/30 single-bug mutants killed**, and **12 headless calibration rollouts** across Claude and Codex):
+
+| Harbor Task Package | Competing Regulatory Regimes | Multi-DB Brownfield Stores | Rubric | Oracles & Mutants |
+|---|---|---|---:|---:|
+| [`tasks/trialvault-consent-withdrawal`](tasks/trialvault-consent-withdrawal) *(v4)* | **HIPAA Safe Harbor** (45 CFR §164.514(b)(2)) + **ICH E6(R3)** scope vs **FDA GCP & 21 CFR Part 11** retention | `edc.db`, `part11_audit.db`, `cdisc_sdtm.db`, `search.db`, `cache.json`, `blobs/` + manifests, `exports/`, `monitoring/` + `.sha256`, `spool/` | **9 criteria / 36 checks** (`<=5.0%` max) | `0.0` starter · `1.0`×2 oracles · **18/18** mutants |
+| [`tasks/trialvault-sae-expedited-reporting`](tasks/trialvault-sae-expedited-reporting) *(v1)* | **FDA 21 CFR §312.32** IND 7d/15d SUSAR reporting vs **ICH E9** selective unblinding & study blind wall + **21 CFR Part 11** | `clinical_edc.db`, `randomization_iwrs.db`, `protocol_rsi.db`, `part11_pv_audit.db`, `search.db`, `cache.json`, `line_listings/` + `.sha256`, `fda_gateway/` | **8 criteria / 30 checks** (`<=4.0%` max) | `0.0` starter · `1.0`×2 oracles · **12/12** mutants |
 
 ---
 
-## Architecture
+## Architecture & Anti-Reward-Hacking Isolation
 
-The environment separates the agent workspace (`/app`, non-root `agent` user, `network_mode = "no-network"`) from a dedicated verifier container (`environment_mode = "separate"`, `network_mode = "no-network"`) so the agent can never inspect tests, reference solutions, or mutant patches.
+Every task runs the coding agent inside a locked-down container (`/app`, non-root `agent` user, `network_mode = "no-network"`) and grades the resulting `/app` artifact inside a **separate verifier container** (`environment_mode = "separate"`, `network_mode = "no-network"`). Policy docs specify 100% of the HTTP wire contract and regulatory laws **without** spoon-feeding internal table/file sink inventories—agents must trace dataflow across the brownfield codebase themselves.
 
 ```mermaid
 flowchart LR
   subgraph agentSandbox [Agent Sandbox - no-network, non-root]
-    instr["instruction.md + docs/"] --> appCode["/app TrialVault Repo"]
-    appCode --> apiSvc["FastAPI EDC + Webhook API"]
-    appCode --> workerSvc["Outbox + Scheduled-Job Worker"]
-    apiSvc --> edcDb["SQLite EDC + Part 11 Audit + Inbox/Queries"]
-    apiSvc --> searchIdx["SQLite FTS5 Search Index"]
-    apiSvc --> projCache["Projection KV Cache"]
-    workerSvc --> blobStore["Lab + eConsent Blob Store + .meta.json"]
-    workerSvc --> exportStore["DSMB Interim Snapshots + SHA-256 Manifests"]
-    workerSvc --> notifSpool["ePRO Outbound Spool + Dead-Letter Queue"]
+    instr["instruction.md + pure policy docs/"] --> appCode["/app Brownfield Codebase"]
+    appCode --> task1["Task 1: EDC + CDISC SDTM + Monitoring + Separate Part 11 DB"]
+    appCode --> task2["Task 2: Blinded EDC + IWRS Vault + RSI DB + FDA ESG Gateway"]
   end
 
   subgraph verifierSandbox [Separate Verifier Sandbox - no-network]
     artifactCopy["Sanitized /app Artifact"] --> seedRun["3x Fresh Randomized Seed Runs"]
-    seedRun --> apiProbe["Black-Box HTTP + Clock + Replay + OS Fault Probes"]
-    apiProbe --> storeAudit["Multi-Store Inspection + Paired Guards"]
-    storeAudit --> rewardKit["RewardKit: 9 Criteria / 33 Weighted Checks"]
-    rewardKit --> rewardJson["/logs/verifier/reward.json"]
+    seedRun --> apiProbe["Black-Box HTTP + Clock + Replay + Cross-DB Fault + 4-Worker Race"]
+    apiProbe --> storeAudit["Multi-DB Inspection + Paired Non-Regression Guards"]
+    storeAudit --> rewardKit["RewardKit: 17 Criteria / 66 Paired Checks"]
   end
 
   appCode -->|"Harbor artifact transfer"| artifactCopy
@@ -41,90 +37,69 @@ flowchart LR
 
 ---
 
-## Below-the-Waterline Engineering Obligations
+## Task 1: `trialvault-consent-withdrawal` (v4 — 9 Criteria, 36 Checks, 18 Mutants)
 
-The PRD-style [`instruction.md`](tasks/trialvault-consent-withdrawal/instruction.md) exposes only two endpoints and points to domain specifications ([`withdrawal-api.md`](tasks/trialvault-consent-withdrawal/environment/workspace/docs/withdrawal-api.md) and [`hipaa-and-21cfr11-retention.md`](tasks/trialvault-consent-withdrawal/environment/workspace/docs/hipaa-and-21cfr11-retention.md)) without leaking an implementation checklist. All seven brownfield systems patterns interact inside one codebase:
+Implements `POST /v1/subjects/{subject_id}/withdrawal-requests` and `GET /v1/withdrawal-requests/{request_id}` across separate SQLite databases and signed artifacts without shared cross-database transactions:
+- **Multi-database Safe Harbor de-identification**: Scrubs `edc.db`, `cdisc_sdtm.db` (`sdtm_dm`, `sdtm_sv`, `sdtm_ae`, `sdtm_lb`, `sdtm_suppqual`), `search.db` (FTS5), `cache.json`, `blobs/` (deleting eConsent, scrubbing lab reports and multi-participant shipment manifests), `exports/` (DSMB snapshots + SHA-256 manifests), `monitoring/` (ICH E6 site enrollment log + `.sha256` sidecar + CRA SDV worklists), and `spool/` (outbound + DLQ). Enforces restricted low-population `ZIP3 -> "000"`, `>89 -> "90+"` with birth year nulled, and alias + dotted-initials (`N.K.`) redaction while keeping clinical narratives intact.
+- **Separate 21 CFR Part 11 ledger & late-stage fault recovery**: `part11_audit.db` is physically isolated from `edc.db`. Phase D injects a transient SQLite `ABORT` outage on `part11_audit.db` *after* downstream stores commit (catching early-`edc.db` mutation bugs that strand retry lookups), alongside OS directory faults and a 4-worker concurrency race.
+- **ICH E6 `follow_up_only` scope & FDA 2008 specimen boundary**: Supports contact-only withdrawal (`409 contact_withdrawn` on reminders, replayed `epro.*` events blocked, clinical identity kept) with later escalation to `full`, plus post-withdrawal lab suppression (`202`) vs pre-withdrawal de-identified ingestion (`201`) across EDC, blobs, manifests, and SDTM.
 
-1. **Cross-cutting PHI de-identification across all active sinks**: Relational tables (`subjects`, `visits`, `adverse_events`, `lab_results`, `data_queries`, `medical_coding_queue`, `epro_notifications`, `webhook_inbox`, `outbox_events`, `scheduled_jobs`, `audit_pii_details`), `search.db` (FTS5), `cache.json`, `blobs/` (including `.meta.json` sidecars), `exports/` (DSMB interim snapshots + SHA-256 manifest re-signing), and `spool/` (`outbound_queue.jsonl` + `dead_letters.jsonl`).
-2. **HIPAA Safe Harbor quasi-identifiers**: Generalize ZIP to 3 digits (`ZIP3`) while zeroing the 17 HHS/Census restricted prefixes (`<= 20,000` population, e.g. `036`, `893`) to `"000"`; aggregate ages `> 89` to `"90+"` while nulling both exact age and birth year; strip exact calendar dates while retaining relative study days; re-key retained rows to an unlinkable opaque `anon_subject_ref` and track suppressions via SHA-256 hashes only.
-3. **Competing FDA GCP & 21 CFR Part 11 invariants**: Never delete clinical records (`GET /v1/trials/{trial_id}/safety-summary` must preserve identical arm counts, AE counts, and lab biomarker means); preserve the immutable SHA-256 hash-chained `audit_log` while purging `audit_pii_details` and appending a validly chained `CONSENT_WITHDRAWN` entry; enforce FDA regulatory holds (`409 Conflict` with zero mutation).
-4. **FDA 2008 pre-vs-post withdrawal specimen boundary**: On late central-lab HL7 webhooks (`POST /v1/webhooks/central-lab`), suppress specimens collected *after* `effective_date` (`202 suppressed`), while retaining specimens collected *on or before* `effective_date` in de-identified form (`201 ingested_deidentified`) under `anon_subject_ref` with zero PHI written to any store.
-5. **Async convergence, delayed jobs, replay suppression & OS-level fault recovery**: `POST` returns `202 pending` and converges only via `python -m trialvault.worker --once`; advancing the worker clock (`--now`) must suppress delayed day-30 ePRO jobs and replayed outbox events for withdrawn subjects while active survivors still fire; an OS-level transient blob fault (`IsADirectoryError`, works identically as `root` in Docker and non-root on macOS) must block premature `"completed"` status and recover cleanly on retry.
-6. **Idempotency, multi-site tenant isolation & co-enrolled household survivors**: `Idempotency-Key` replay returns the same `request_id`, cross-subject reuse returns `409 Conflict`, cross-site or missing `privacy:withdraw` scope returns `403`, co-enrolled household members sharing an address/ZIP/emergency phone remain untouched, and multi-participant lab shipment manifests are scrubbed only for the withdrawn participant (aliases and dotted initials like `N.K.` included, clinical narrative kept).
-7. **Partial withdrawal, escalation & concurrency**: A `follow_up_only` request stops all participant contact (pending ePRO cancelled, replayed `epro.*` events and jobs never delivered, ePRO reminder `POST` returns `409 contact_withdrawn`) while labs, search, and identity stay intact; a later `full` request escalates to a separate de-identifying request; and several workers racing on the same request must still produce exactly one `CONSENT_WITHDRAWN` audit entry and one anonymized subject row.
-
----
-
-## RewardKit Partial-Credit Rubric (9 Criteria, 33 Paired Checks)
-
-Every check runs across **3 fresh randomized-seed trials** and keeps the **minimum score** to prevent flakiness or fixture hardcoding. No single check exceeds `5.0%`, every positive check is paired with a non-regression guard, "didn't break it" guards only pay out once the withdrawal itself has run, and each probe phase is isolated so one crash cannot zero unrelated checks. An untouched starter repo scores strictly **`0.000`**.
-
-| Criterion | Weight | Checks | Max Check | Paired Guard / Anti-Shortcut Coverage |
+| Criterion | Weight | Checks | Max Check | Coverage |
 |---|---:|---:|---:|---|
-| `api_contract` | 9.0% | 5 | 2.25% | `202 pending`, response contract (no PHI), `404` unknown, same-key replay vs cross-subject `409` |
-| `active_store_deid` | 24.0% | 8 | 3.31% | Direct PHI + `404`/`200` reads, ZIP3 & `"000"` restricted, `>89` & dates, free-text/queries/coding/inbox, FTS5, cache, lab+eConsent blobs + `.meta.json` + DSMB SHA-256, aliases and dotted initials redacted with clinical narrative kept |
-| `clinical_retention` | 14.0% | 4 | 4.38% | Identical safety summary totals, retained/re-keyed clinical rows, unbroken Part 11 SHA-256 chain, `audit_pii_details` purge + `CONSENT_WITHDRAWN` log |
-| `async_convergence` | 12.0% | 4 | 3.75% | Blocks synchronous `completed` before worker, verifies convergence after worker, sanitizes ePRO DB/scheduled jobs/spool/DLQ while survivor day-30 fires, 4 synchronized workers produce exactly one withdrawal |
-| `replay_and_late_webhooks` | 12.0% | 3 | 4.29% | Post-withdrawal suppress (`202`) + pre-withdrawal de-identified ingest (`201`), outbox + scheduled-job replay suppression, paired active-subject webhook guard |
-| `failure_and_recovery` | 7.0% | 2 | 3.50% | OS-level transient blob fault blocks premature completion, subsequent retry converges cleanly |
-| `isolation_and_survivors` | 10.0% | 4 | 2.69% | Cross-site & missing-scope `403`, FDA regulatory hold `409` with zero mutation, co-enrolled household survivor intact, shared shipment manifest scrubbed for the withdrawn participant only |
-| `withdrawal_scope` | 10.0% | 2 | 5.00% | `follow_up_only` stops contact (409 reminders, replays blocked) while labs/search/identity stay; escalation to `full` creates a new request and de-identifies |
-| `baseline_health` | 2.0% | 1 | 2.00% | Post-withdrawal enrollment, FTS5 search, and final Part 11 audit chain remain healthy |
-| **Total** | **100.0%** | **33** | **5.0%** | **Starter = `0.000` · `SOLUTION=1` = `1.000` · `SOLUTION=2` = `1.000`** |
+| `api_contract` | 9.0% | 5 | 2.25% | `202 pending`, status contract (no PHI), `404` unknown, `Idempotency-Key` replay vs `409` conflict |
+| `active_store_deid` | 24.0% | 9 | 2.91% | Direct PHI, restricted `ZIP3`, `>89` & dates, free-text/queries/coding/inbox, FTS5, cache, blobs + DSMB SHA-256, aliases/initials, CDISC SDTM warehouse |
+| `clinical_retention` | 13.0% | 4 | 4.06% | Safety summary arm/lab invariants, retained re-keyed rows, Part 11 SHA-256 chain, PII purge + `CONSENT_WITHDRAWN` |
+| `async_convergence` | 12.0% | 4 | 3.75% | Pre-worker pending guard, post-worker convergence, ePRO/spool/DLQ sanitization, 4-worker race exactly-once |
+| `replay_and_late_webhooks` | 11.0% | 3 | 3.93% | FDA pre/post specimen boundary (`202` vs `201`), outbox + scheduled-job replay suppression, active webhook guard |
+| `failure_and_recovery` | 9.0% | 3 | 3.00% | OS blob fault guard, blob fault retry convergence, late-stage `part11_audit.db` outage recovery without orphaned PHI |
+| `isolation_and_survivors` | 10.0% | 5 | 2.12% | Cross-site & scope `403`, FDA regulatory hold `409`, co-enrolled household survivor, shared shipment manifest, signed site enrollment & SDV logs |
+| `withdrawal_scope` | 10.0% | 2 | 5.00% | `follow_up_only` contact suppression + data retention, escalation to `full` de-identification |
+| `baseline_health` | 2.0% | 1 | 2.00% | Post-withdrawal subject enrollment, search, and final Part 11 chain integrity |
 
 ---
 
-## Verification Proofs: Dual Oracles & 15-Mutant Kill Matrix
+## Task 2: `trialvault-sae-expedited-reporting` (v1 — 8 Criteria, 30 Checks, 12 Mutants)
 
-Two completely independent reference architectures are shipped in [`solution/solve.sh`](tasks/trialvault-consent-withdrawal/solution/solve.sh) to prove the black-box verifier is design-independent:
-- **`SOLUTION=1`**: Transactional outbox worker + `withdrawal_requests` / `withdrawal_suppressions` ledger.
-- **`SOLUTION=2`**: Checkpointed saga state machine (`privacy_sagas` per-store step checkpoints + `suppression_digests`, independent of `outbox_events`).
+Implements `POST /v1/safety-reports/e2b`, `GET /v1/safety-cases/{case_uid}`, `GET /v1/pv/cases/{case_uid}`, and `GET /v1/pv/submissions` across four isolated databases (`clinical_edc.db`, `randomization_iwrs.db`, `protocol_rsi.db`, `part11_pv_audit.db`):
+- **Three-legged 21 CFR §312.32 SUSAR triage**: Evaluates cumulative **Serious** (6 ICH E2B flags), **Suspected** (composite OR-causality: neither investigator nor sponsor can downgrade the other's positive causality), and **Unexpected** against the Investigator's Brochure RSI effective at initial awareness (unlisted MedDRA PT, `ctcae_grade > max_expected_grade`, or fatal/life-threatening outcome when `fatal_expected == 0`).
+- **ICH E9 selective IWRS unblinding & study blinding wall**: Queries `randomization_iwrs.db` (which logs immutable `iwrs_unblind_audit` rows) *only* when all 3 SUSAR legs hold, at most once per case across follow-ups and retries. Closes `PLACEBO` candidates (`closed_non_investigational`) without FDA dispatch while keeping `site:safety` endpoints, `clinical_edc.db`, FTS5 `search.db`, `cache.json`, and signed site line listings 100% blinded (`"received"` -> `"assessed"`).
+- **Out-of-order E2B merge, Day-0 anchoring & retroactive 15d -> 7d tightening**: Merges out-of-order `followup_num` transmissions monotonically without overwriting newer narratives; anchors `day0_at` to the exact report that first crossed the SUSAR threshold; tightens unsubmitted 15-day clocks to `min(existing_due_at, T_up + 7d)` on fatal/LT escalation; distinguishes material post-ACK escalations (`submission_type = "followup"`) from benign narrative typo amendments; and recovers cleanly from FDA ESG `nack_retryable`, filesystem faults, `part11_pv_audit.db` aborts, and 4-worker races.
 
-Fifteen single-bug mutant patches live in [`tasks/trialvault-consent-withdrawal/tests/mutants/`](tasks/trialvault-consent-withdrawal/tests/mutants/) (excluded from live sandbox uploads via [`.harborignore`](tasks/trialvault-consent-withdrawal/tests/.harborignore)) and are executed in CI (`pytest`):
-
-| Mutant Patch | Planted Bug | Targeted Check(s) Killed | Result |
-|---|---|---|---|
-| `m01_fts_search_retained` | Skips FTS5 index deletion | `fts5_search_index_clean` | Killed |
-| `m02_cache_projection_retained` | Skips subject/MRN projection cache eviction | `projection_cache_clean` | Killed |
-| `m03_restricted_zip3_unzeroed` | Truncates ZIP without zeroing restricted `<=20k` prefixes | `safe_harbor_zip3_and_restricted_zeroed` | Killed |
-| `m04_age90_birthyear_leak` | Retains birth year & exact age for age `>89` | `safe_harbor_age_over_89_and_dates` | Killed |
-| `m05_cascade_delete_safety_rows` | Deletes clinical AE + coding rows instead of retaining | `safety_summary_arm_totals_preserved`, `clinical_rows_retained_and_rekeyed` | Killed |
-| `m06_audit_chain_broken` | Mutates existing `audit_log` row, breaking SHA-256 chain | `part11_audit_chain_valid` | Killed |
-| `m07_premature_completed_status` | Marks request `completed` synchronously on `POST` | `post_returns_202_pending`, `not_completed_before_convergence` | Killed |
-| `m08_late_hl7_webhook_reintroduces_phi` | Omits suppression lookup on central-lab webhooks | `late_hl7_webhook_suppressed` | Killed |
-| `m09_cross_site_tenant_leak` | Omits site ownership check on `GET /withdrawal-requests/{id}` | `cross_site_and_scope_isolation` | Killed |
-| `m10_regulatory_hold_ignored` | Allows withdrawal on subjects under active FDA hold | `regulatory_hold_blocks_409_no_mutation` | Killed |
-| `m11_follow_up_scope_ignored` | Parses `scope` but always runs a full de-identification | `follow_up_only_stops_contact_keeps_data`, `scope_escalation_to_full` | Killed |
-| `m12_aliases_not_tokenized` | Redacts the legal name but not recorded aliases | `aliases_and_initials_redacted` | Killed |
-| `m13_shipment_manifest_untouched` | Leaves the withdrawn participant in multi-participant shipment manifests | `shared_shipment_manifest_scoped` | Killed |
-| `m14_concurrent_double_apply` | Drops the locked re-check, so racing workers append `CONSENT_WITHDRAWN` twice | `concurrent_workers_exactly_once` | Killed |
-| `m15_replayed_contact_event_delivered` | Worker honours only full-withdrawal suppression, delivering replayed ePRO to follow-up-only participants | `follow_up_only_stops_contact_keeps_data` | Killed |
+| Criterion | Weight | Checks | Max Check | Coverage |
+|---|---:|---:|---:|---|
+| `e2b_api_and_idempotency` | 14.0% | 5 | 3.00% | `202 received`, `site:safety` vs `pv:unblinded` auth/tenant `403`, `Idempotency-Key` replay/`409`, `(case_uid, followup_num)` conflict, out-of-order monotonic merge |
+| `susar_triage_and_rsi` | 16.0% | 5 | 3.50% | 3-leg SUSAR positive triage, sponsor/investigator OR-causality, RSI expected vs grade-exceeded vs fatal-unexpected |
+| `selective_unblinding_and_iwrs` | 12.0% | 3 | 4.00% | Zero IWRS queries on non-SUSARs, placebo closure without FDA submission, single IWRS audit row across retries/follow-ups |
+| `blinding_wall_and_projections` | 16.0% | 4 | 4.00% | Zero arm/SUSAR leak on blinded endpoint, SQLite/FTS5/cache zero leak, signed site blinded listing, signed DSMB SUSAR listing |
+| `day0_clock_and_tightening` | 16.0% | 4 | 4.00% | 15d vs 7d initial clocks, delayed threshold Day-0 anchoring, `min(due, T_up+7d)` tightening, post-ACK follow-up vs benign amendment |
+| `fda_gateway_and_fault_recovery` | 11.0% | 4 | 3.00% | ESG payload/meta/ACK log, `nack_retryable` handling, OS directory fault recovery, `part11_pv_audit.db` abort recovery |
+| `part11_audit_and_concurrency` | 10.0% | 3 | 3.50% | Unbroken Part 11 SHA-256 chain, `IND_SAFETY_SUBMITTED` logged only on ACK, 4-worker race single submission & unblind |
+| `baseline_pv_preservation` | 5.0% | 2 | 2.50% | Baseline subjects/search/blinded summary intact, post-SAE enrollment and search workflows |
 
 ---
 
-## Multi-Model Calibration & Verifier Audit Findings
+## Multi-Model Calibration & Verifier Audit Findings (12 Live Runs)
 
-Using [`scripts/calibrate.py`](scripts/calibrate.py), live coding agents were dropped into isolated temporary copies of `environment/workspace/` with **only `instruction.md` and `docs/`** (zero visibility of `tests/` or `solution/`), given the task's full 1800 s agent budget, and graded with the 3-run RewardKit verifier. Each model ran twice on the final v3 verifier (artifacts in [`benchmarking-runs/`](benchmarking-runs/); earlier v2 runs are kept under [`benchmarking-runs/v2/`](benchmarking-runs/v2/)).
+Using [`scripts/calibrate.py`](scripts/calibrate.py), live agents ran inside isolated copies of each task's `environment/workspace/` with **only `instruction.md` and `docs/`** (1800 s timeout, graded across 3 fresh randomized-seed runs per evaluation; artifacts in [`benchmarking-runs/`](benchmarking-runs/)):
 
-| Model / Harness | Run | Elapsed | Score | Passed | Failing check and cause |
-|---|---:|---:|---:|---:|---|
-| `claude-haiku-4.5` (`claude` CLI) | 1 | 754s | **95.7%** | 32/33 | `replayed_outbox_event_suppressed`: a replayed outbox event re-delivers plaintext subject ID, MRN, name, and email |
-| `claude-haiku-4.5` (`claude` CLI) | 2 | 754s | **95.7%** | 32/33 | Same replay leak |
-| `claude-sonnet-5` (`claude` CLI) | 1 | 1102s | **97.7%** | 32/33 | `shared_shipment_manifest_scoped`: verifier artifact, fixed (see below) |
-| `claude-sonnet-5` (`claude` CLI) | 2 | 748s | **100.0%** | 33/33 | None |
-| `gpt-6.2-sol` (`codex` CLI) | 1 | 858s | **97.5%** | 32/33 | `aliases_and_initials_redacted`: dotted initials `N.K.` left in clinical notes |
-| `gpt-6.2-sol` (`codex` CLI) | 2 | 1039s | **97.5%** | 32/33 | Same initials leak |
+| Task | Model / Harness | Run 1 | Run 2 | Passed | Repeatable Failure Mode |
+|---|---|---:|---:|---:|---|
+| `consent-withdrawal` *(v4)* | `codex-gpt-6.2-sol` (`codex` CLI) | **92.8%** | **92.8%** | 33/36 | Missed dotted initials `N.K.`, propagating PHI into EDC notes, CDISC SDTM `sdtm_sv`, and CRA SDV logs (down from 97.5% on v3) |
+| `consent-withdrawal` *(v4)* | `claude-haiku-4.5` (`claude` CLI) | **96.1%** | **96.1%** | 35/36 | Replayed historical outbox event re-delivered plaintext subject ID, MRN, name, and email |
+| `consent-withdrawal` *(v4)* | `claude-sonnet-5` (`claude` CLI) | **100.0%** | **100.0%** | 36/36 | Clean pass on both runs (proving zero fake difficulty even with un-spoon-fed docs & 3 SQLite DBs) |
+| `sae-expedited-reporting` *(v1)* | `codex-gpt-6.2-sol` (`codex` CLI) | **94.0%** | **94.0%** | 28/30 | Exposed verifier schema coupling on omitted top-level `seriousness` in negative 403/409 probes (fixed; see audit #4) |
+| `sae-expedited-reporting` *(v1)* | `claude-haiku-4.5` (`claude` CLI) | **100.0%** | **100.0%** | 30/30 | Clean pass on both runs |
+| `sae-expedited-reporting` *(v1)* | `claude-sonnet-5` (`claude` CLI) | **100.0%** | **100.0%** | 30/30 | Clean pass on both runs |
 
-**Full-pass rate (reward = 1.0): 1 of 6 runs (16.7%).** Counting the artifact-affected Sonnet run as a pass gives an upper bound of 2 of 6 (33.3%). Mean partial credit is 97.4%.
+### Four Verifier Bugs Caught & Fixed Through Empirical Failing-Check Audits
+Every failing check across v2, v3, v4, and SAE v1 was audited against the agent's code rather than celebrated blindly:
+1. **JSON key-name coupling (`blobs_and_metadata_clean`, CW v2)**: Accepted either `anon_subject_ref` or re-keyed `subject_id` while enforcing zero PHI and intact numeric values.
+2. **Undocumented status coupling (`epro_notifications_spool_and_dlq_sanitized`, CW v2)**: Replaced exact internal row-status equality with behavioral assertions (zero pending rows, `recipient IS NULL`, zero PHI, active survivor day-30 firing).
+3. **Shared random fixture token (`shared_shipment_manifest_scoped`, CW v3)**: Decoupled lab accession/shipment random tags from participant email/MRN tags so case-insensitive email-token redactors don't clip accession IDs.
+4. **Omitted top-level object on auth/idempotency probes (`auth_and_tenant_site_enforcement`, SAE v1)**: Negative 403/404/409 E2B probes omitted top-level `seriousness` even though `sae-reporting-api.md` only stated inner boolean keys defaulted to `false`, triggering FastAPI `422` before Codex's `403`/`409` logic ran. Fixed in both the spec and probe payloads.
 
-### What the Failing-Check Audit Caught & Fixed
-Every failing check was traced back to the agent's code. Two failures are real, repeatable agent bugs that each model reproduced in both runs. The third, plus two from the v2 calibration, were verifier problems, and all three are fixed:
-1. **Key-name coupling (`blobs_and_metadata_clean`, v2)**: Rejected valid solutions that replaced `subject_id`'s value with `anon_subject_ref` instead of renaming the JSON key. Now accepts either key name while strictly asserting zero PHI and intact numeric results.
-2. **Undocumented row-retention detail (`epro_notifications_spool_and_dlq_sanitized`, v2)**: Asserted exact `["cancelled", "sent"]` statuses the docs never required. Now verifies zero `pending` rows, `recipient IS NULL`, zero PHI across DB/scheduled jobs/spool/DLQ, and survivor day-30 execution.
-3. **Shared fixture token (`shared_shipment_manifest_scoped`, v3)**: Accession numbers embedded the same random tag as the participant's email, so a reasonable case-insensitive email-token redactor clipped `ACC-PRI-R…` in 1 of 3 fresh runs with zero PHI leaked. Accession and shipment IDs now use an independent token. The Sonnet sandbox was discarded after grading, so that run was not re-scored.
-
-### Honest Difficulty Analysis
-v3 adds partial (`follow_up_only`) withdrawal with escalation, alias and initials redaction, multi-participant shipment manifests, and exactly-once completion under 4 racing workers. Every model solved the scope, shipment-manifest, and concurrency obligations. The remaining failures are narrow: initials redaction, also new in v3, tripped Codex in both runs, and the older replay-suppression rule tripped Haiku in both runs. The full-pass rate sits near the `<30%` target, but partial credit stays high. That is expected for an embedded 5-store Python stack that fits in one context window. Pushing partial scores down without fake difficulty means moving the same clinical contract onto a multi-service Docker Compose stack (`api-gateway`, `edc-service`, `lab-ingestor`, `dsmb-exporter`, `epro-worker` over Postgres, OpenSearch, MinIO, and Redpanda), where cross-service ordering, index refresh lag, and partial container failure cannot be solved in one SQLite transaction.
+### Honest Scaling Takeaway
+Removing internal sink lists from `docs/` and splitting `consent-withdrawal` into separate SQLite databases (`edc.db`, `part11_audit.db`, `cdisc_sdtm.db`) + signed monitoring logs dropped `gpt-6.2-sol` from `97.5%` (v3) to `92.8%` (`33/36`) identically across both runs, while proving zero fake difficulty (`claude-sonnet-5` = `100%`, dual oracles = `100%`). At the same time, these 12 rollouts demonstrate a clear systems lesson for RLVR design: when a self-contained Python service (~3k LOC) fits inside one context window, late-2026 frontier agents read the entire package graph and score `92%–100%` partial credit (even while 7B–32B open-weight models get dense gradient signal across the 66 checks). Pushing *frontier* mean partial credit below `30%` without fake difficulty requires scaling these exact clinical contracts to 30k+ LOC multi-container network services (Postgres, OpenSearch, MinIO, Redpanda) where asynchronous network lag and cross-process crashes cannot be inspected in one local directory.
 
 ---
 
@@ -134,33 +109,25 @@ v3 adds partial (`follow_up_only`) withdrawal with escalation, alias and initial
 # 1. Install local dependencies
 uv sync --python 3.12
 
-# 2. Run ruff + starter baseline EDC tests + 18 verifier/mutant tests (starter=0, sol1=1, sol2=1, 15/15 mutants)
+# 2. Run ruff + starter baseline tests + all 37 verifier/oracle/30-mutant tests across both tasks
 uv run --python 3.12 ruff check .
 PYTHONPATH=tasks/trialvault-consent-withdrawal/environment/workspace \
   uv run --python 3.12 pytest -v tasks/trialvault-consent-withdrawal/environment/workspace/tests/test_baseline_edc.py
+PYTHONPATH=tasks/trialvault-sae-expedited-reporting/environment/workspace \
+  uv run --python 3.12 pytest -v tasks/trialvault-sae-expedited-reporting/environment/workspace/tests/test_baseline_pv.py
 uv run --python 3.12 pytest -v
 
-# 3. Run Harbor static lint (including non-root agent check)
+# 3. Run Harbor static lint (with root-agent rule) on both tasks
 uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-consent-withdrawal
+uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-sae-expedited-reporting
 
-# 4. Run Dockerized Harbor trials (executed automatically in GitHub Actions CI)
-uvx --python 3.12 harbor run -p tasks/trialvault-consent-withdrawal -a nop
-uvx --python 3.12 harbor run -p tasks/trialvault-consent-withdrawal -a oracle --ae SOLUTION=1
-uvx --python 3.12 harbor run -p tasks/trialvault-consent-withdrawal -a oracle --ae SOLUTION=2
+# 4. Run Dockerized Harbor trials (executed automatically in GitHub Actions CI matrix)
+for task in trialvault-consent-withdrawal trialvault-sae-expedited-reporting; do
+  uvx --python 3.12 harbor run -p "tasks/$task" -a nop
+  uvx --python 3.12 harbor run -p "tasks/$task" -a oracle --ae SOLUTION=1
+  uvx --python 3.12 harbor run -p "tasks/$task" -a oracle --ae SOLUTION=2
+done
 
-# 5. Reproduce headless multi-model calibration locally
-uv run --python 3.12 python scripts/calibrate.py \
-  --harness claude --model sonnet --label claude-sonnet-5 --runs 2 --timeout-sec 1800 --eval-runs 3
-
-# 6. Run the interactive TrialVault Workbench UI locally (deployable to Vercel via vercel.json)
+# 5. Run the multi-task TrialVault Workbench UI locally (deployable to Vercel via vercel.json)
 cd web && npm install && npm run dev
 ```
-
-## Interactive Workbench UI (`web/`)
-
-An interactive React + TypeScript workbench lives under [`web/`](web/) (configured for one-click Vercel deployment via [`vercel.json`](vercel.json)) and stays decoupled from `tasks/trialvault-consent-withdrawal/`:
-
-- **Simulator**: An illustrative client-side replica (not the real app or verifier). Step through `POST /withdrawal-requests`, async worker convergence, clock advancement, FDA 2008 pre-vs-post withdrawal central-lab webhooks, and OS-level blob fault recovery across all stores.
-- **Calibration**: Inspect per-check RewardKit reasoning across all 33 checks and live model runs synced from `benchmarking-runs/`.
-- **Mutants**: Browse all 15 real unified diffs from `tests/mutants/` and the exact targeted checks each mutant triggers.
-

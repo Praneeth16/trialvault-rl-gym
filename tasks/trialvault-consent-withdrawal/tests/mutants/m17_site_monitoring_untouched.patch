@@ -1,0 +1,21 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -687,18 +687,6 @@
+         _deidentify_sdtm_warehouse(
+             paths,
+             orig_subject_id=orig_subject_id,
+-            anon_ref=anon_ref,
+-            new_zip=new_zip,
+-            new_age=new_age,
+-            new_age_bucket=new_age_bucket,
+-            new_dob=new_dob,
+-            tokens=tokens,
+-        )
+-        _deidentify_site_monitoring(
+-            paths,
+-            site_id=site_id,
+-            orig_subject_id=orig_subject_id,
+-            orig_mrn=orig_mrn,
+             anon_ref=anon_ref,
+             new_zip=new_zip,
+             new_age=new_age,

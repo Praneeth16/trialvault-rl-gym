@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -899,7 +899,7 @@
+             treatment_arm = str(iwrs_info["treatment_arm"])
+             is_inv_drug = bool(iwrs_info["is_investigational_drug"])
+ 
+-        if not is_inv_drug:
++        if False and not is_inv_drug:
+             if pv_row is None:
+                 pv_conn.execute(
+                     """

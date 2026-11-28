@@ -45,34 +45,46 @@ export interface AuditFix {
   fix: string;
 }
 
+export interface TaskDataset {
+  slug: string;
+  title: string;
+  stageLabel: string;
+  criteria: CriterionMeta[];
+  checks: CheckMeta[];
+  runs: CalibrationRun[];
+  mutants: MutantItem[];
+  stats: {
+    checksCount: number;
+    criteriaCount: number;
+    mutantsCount: number;
+    runsCount: number;
+    fullPassRuns: string;
+    fullPassRatePct: number;
+    meanReward: number;
+  };
+}
+
 export interface GeneratedRepoData {
   summary: {
-    task: string;
+    gym: string;
     verifier_spec: {
       framework: string;
       harbor_version: string;
-      criteria_count: number;
-      checks_count: number;
+      tasks_count: number;
+      total_criteria_count: number;
+      total_checks_count: number;
       max_single_check_weight_pct: number;
       fresh_seeded_runs_per_eval: number;
     };
     boundary_and_mutant_proofs: {
       starter_untouched: number;
-      oracle_solution_1_outbox: number;
-      oracle_solution_2_saga: number;
+      oracle_solution_1: number;
+      oracle_solution_2: number;
       mutants_killed: string;
       harbor_lint_root_agent: string;
     };
     verifier_audit_fixes: AuditFix[];
-    calibration_aggregate_v3: {
-      full_pass_runs: string;
-      full_pass_rate_pct: number;
-      mean_reward: number;
-    };
     difficulty_takeaway: string;
   };
-  criteria: CriterionMeta[];
-  checks: CheckMeta[];
-  runs: CalibrationRun[];
-  mutants: MutantItem[];
+  tasks: TaskDataset[];
 }

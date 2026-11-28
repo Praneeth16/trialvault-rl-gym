@@ -1,6 +1,6 @@
 # TrialVault Participant Consent Withdrawal API Contract
 
-This document defines the HTTP contract for participant consent withdrawal and related post-withdrawal behavior in TrialVault. Existing EDC endpoints, authentication rules, and response shapes must remain backwards compatible.
+This document defines the HTTP contract for participant consent withdrawal and post-withdrawal behavior in TrialVault. Existing EDC, study-tabulation, and site-monitoring endpoints, authentication rules, and response shapes must remain backwards compatible.
 
 ## Authentication & Authorization
 
@@ -11,7 +11,7 @@ Authorization: Bearer <site_token>
 ```
 
 Scopes:
-- `edc:read` — read subject records, coordinator search, queries, DSMB snapshots, and trial safety summaries
+- `edc:read` — read subject records, coordinator search, queries, DSMB snapshots, site enrollment logs, SDTM summaries, and trial safety summaries
 - `edc:write` — enroll subjects, record visits, adverse events, monitor queries, ePRO reminders, and generate DSMB snapshots
 - `privacy:withdraw` — initiate and read participant consent withdrawal requests
 
@@ -25,7 +25,7 @@ Authorization rules:
 
 ### 1. `POST /v1/subjects/{subject_id}/withdrawal-requests`
 
-Initiates an asynchronous consent withdrawal and HIPAA Safe Harbor de-identification workflow for `subject_id`.
+Initiates an asynchronous consent withdrawal workflow for `subject_id`.
 
 **Headers**
 - `Authorization: Bearer <site_token>` (required, scope `privacy:withdraw`)
@@ -66,7 +66,7 @@ All fields are optional. `reason` defaults to `"participant_request"`, `requeste
 - `202 Accepted` — Withdrawal request accepted.
   - Replaying the same `Idempotency-Key` for the same subject returns `202` with the exact same `request_id` (the request originally bound to that key, regardless of the replayed body).
   - Submitting another withdrawal request for a subject that already has a withdrawal request (pending, in progress, or completed) returns `202` with the existing `request_id` without starting a competing workflow, subject to the escalation rule in [Withdrawal Scope](#withdrawal-scope).
-  - A newly created request MUST return `"status": "pending"` and `"completed_at": null`. Convergence across TrialVault's systems happens asynchronously through the background worker (`python -m trialvault.worker --once`).
+  - A newly created request MUST return `"status": "pending"` and `"completed_at": null`. Convergence across TrialVault's stores happens asynchronously through the background worker (`python -m trialvault.worker --once`).
 
 **Response Shape (`202 Accepted`)**
 ```json
@@ -95,25 +95,22 @@ Returns the status of a withdrawal request using the same JSON shape as `POST`.
 
 ICH E6(R3) distinguishes a participant who withdraws from all further study contact from one who withdraws consent for continued use of their identifiable data.
 
-- **`"full"`** (default): consent withdrawal with HIPAA Safe Harbor de-identification, as described throughout this document and `docs/hipaa-and-21cfr11-retention.md`.
-- **`"follow_up_only"`**: the participant stops all study contact but keeps consent for the use of identifiable data already collected and for continued central-lab results. Nothing is de-identified, and regulatory holds do not block it. The request may only reach `"completed"` once:
-  - every pending ePRO notification for the subject is `cancelled`;
-  - every scheduled contact job (`job_type` starting with `epro.`) for the subject is cancelled and can never execute, including jobs or contact events replayed later;
-  - the subject's entries are removed from the outbound spool and the dead-letter queue;
+- **`"full"`** (default): consent withdrawal with HIPAA Safe Harbor de-identification across all TrialVault data stores, analytical/tabulation warehouses, site/trial logs and exports, search/caching layers, stored documents/manifests, and asynchronous queues, as defined in `docs/hipaa-and-21cfr11-retention.md`.
+- **`"follow_up_only"`**: the participant stops all study contact (diaries, reminders, and follow-up outreach) while keeping consent for identifiable clinical data and continued central-lab assays. Nothing is de-identified, and regulatory holds do not block it. The request may only reach `"completed"` once:
+  - all pending, scheduled, queued, or failed outbound participant communications for the subject are cancelled or removed, and future or replayed contact events/jobs for the subject can never be delivered;
   - `GET /v1/subjects/{subject_id}` returns the unchanged record with `"status": "follow_up_withdrawn"`.
 
-  Once a `follow_up_only` request exists, `POST /v1/subjects/{subject_id}/epro-reminders` returns `409 Conflict` with `{"error": "contact_withdrawn"}`. Central-lab webhooks for the subject keep returning `201 Created` with normal ingestion, and search continues to find the subject.
-- **Escalation**: a `"full"` request for a subject whose only existing request is `"follow_up_only"` creates a new full request (new `request_id`, `202`, `"status": "pending"`). The earlier follow-up request is left as is. Once a full request exists, any further request for that subject (either scope) returns the full request. A repeated `"follow_up_only"` request returns the existing follow-up request.
+  Once a `follow_up_only` request exists, `POST /v1/subjects/{subject_id}/epro-reminders` returns `409 Conflict` with `{"error": "contact_withdrawn"}`. Central-lab webhooks for the subject keep returning `201 Created` with normal ingestion, and coordinator search continues to find the subject.
+- **Escalation**: a `"full"` request for a subject whose only existing request is `"follow_up_only"` creates a new full request (new `request_id`, `202`, `"status": "pending"`). The earlier follow-up request remains intact. Once a full request exists, any further request for that subject (either scope) returns the full request. A repeated `"follow_up_only"` request returns the existing follow-up request.
 
 ## Post-Withdrawal Subject Reads & Central-Lab Webhooks
 
 ### Subject Read Behavior
-- After withdrawal converges, `GET /v1/subjects/{original_subject_id}` must return `404 Not Found`.
-- `GET /v1/subjects/{anon_subject_ref}` (by an authorized token for the same site) must return `200 OK` with the de-identified clinical record (`status = "withdrawn"`, visits, adverse events, and labs intact, zero PHI).
+- After a full withdrawal converges, `GET /v1/subjects/{original_subject_id}` must return `404 Not Found`.
+- `GET /v1/subjects/{anon_subject_ref}` (by an authorized token for the same site) must return `200 OK` with the de-identified clinical record (`status = "withdrawn"`, visits, adverse events, queries, and labs intact, zero PHI).
 
 ### Central-Lab Webhooks (`POST /v1/webhooks/central-lab`)
 Central labs can deliver results asynchronously after a participant withdraws consent:
-- **Post-withdrawal collection (`collected_date > effective_date`)**: Must be suppressed. Return `202 Accepted` with `{"status": "suppressed", "accession_no": "<accession_no>"}`. Write no clinical rows, blobs, inbox PHI, search entries, cache entries, or outbox events.
-- **Pre-withdrawal collection (`collected_date <= effective_date`)**: Under FDA GCP data-retention guidance, specimens collected *before* consent withdrawal remain part of the clinical record. Return `201 Created` with `{"status": "ingested_deidentified", "accession_no": "<accession_no>", "anon_subject_ref": "<anon_subject_ref>"}`, persist the numeric lab result and de-identified lab report under `anon_subject_ref` with `collected_date = null` and zero PHI anywhere (including inbox, audit details, cache, search, and report metadata), and ensure `GET /v1/trials/{trial_id}/safety-summary` reflects the new measurement.
+- **Post-withdrawal collection (`collected_date > effective_date`)**: Must be suppressed. Return `202 Accepted` with `{"status": "suppressed", "accession_no": "<accession_no>"}`. Write no clinical, tabulation, archive, document, manifest, search, cache, or queue entries.
+- **Pre-withdrawal collection (`collected_date <= effective_date`)**: Under FDA GCP data-retention guidance, specimens collected *on or before* consent withdrawal remain part of the clinical record. Return `201 Created` with `{"status": "ingested_deidentified", "accession_no": "<accession_no>", "anon_subject_ref": "<anon_subject_ref>"}`, persist the numeric lab result and de-identified report/manifest/tabulation records under `anon_subject_ref` with `collected_date = null` and zero PHI anywhere, and ensure trial safety and SDTM summaries reflect the new measurement.
 - **Active subjects**: Continue to return `201 Created` with normal ingestion.
-- **Shipment manifests**: Webhooks may carry a `shipment_id`. Each specimen is also appended to the multi-participant shipment manifest at `labs/{site_id}/shipments/{shipment_id}.json` in the blob store. A pre-withdrawal specimen ingested de-identified is appended under `anon_subject_ref` with no PHI.

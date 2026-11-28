@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -1055,7 +1055,7 @@
+             if latest_sub["status"] in {"pending", "retry_pending"}:
+                 new_clock = str(latest_sub["report_clock"])
+                 new_due_dt = parse_utc_iso(str(latest_sub["due_at"]))
+-                if new_clock == "15_day" and (
++                if False and new_clock == "15_day" and (
+                     merged["seriousness"]["death"] or merged["seriousness"]["life_threatening"]
+                 ):
+                     for r in chrono:

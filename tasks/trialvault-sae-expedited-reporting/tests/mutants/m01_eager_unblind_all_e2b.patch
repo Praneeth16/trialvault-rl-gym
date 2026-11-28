@@ -1,0 +1,17 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -842,6 +842,14 @@
+             else None
+         )
+ 
++        if not unblinded:
++            lookup_treatment_assignment(
++                paths.iwrs_db,
++                trial_id=trial_id,
++                subject_id=subject_id,
++                case_uid=case_uid,
++                actor='pv-worker',
++            )
+         if not qualifies_susar and not unblinded:
+             if pv_row is None:
+                 pv_conn.execute(

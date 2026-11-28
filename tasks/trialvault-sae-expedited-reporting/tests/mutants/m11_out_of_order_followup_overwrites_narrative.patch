@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -140,7 +140,7 @@
+ 
+ def _merge_reports(rows: list[sqlite3.Row | dict[str, Any]]) -> dict[str, Any]:
+     by_fu = sorted(rows, key=lambda r: int(r["followup_num"]))
+-    highest = by_fu[-1]
++    highest = list(rows)[-1]
+     spon_rows = [r for r in by_fu if r["sponsor_causality"] is not None]
+     sponsor_causality = spon_rows[-1]["sponsor_causality"] if spon_rows else None
+ 

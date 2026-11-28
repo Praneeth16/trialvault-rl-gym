@@ -1,0 +1,52 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -85,8 +85,7 @@
+     covered_grade INTEGER NOT NULL,
+     covered_seriousness_json TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+-    updated_at TEXT NOT NULL,
+-    UNIQUE(case_uid, sequence_num)
++    updated_at TEXT NOT NULL
+ );
+ 
+ CREATE INDEX IF NOT EXISTS idx_pv_cases_trial ON pv_case_assessments(trial_id);
+@@ -823,16 +822,20 @@
+     )
+     qualifies_susar = is_s and is_susp and is_unexp
+ 
+-    # Refresh blinded site projections first (strictly decoupled from PV unblinding state)
++    # Stale unlocked pre-read before slow projection I/O (TOCTOU race across concurrent workers)
++    with connect_pv(paths) as _pre_conn:
++        pv_row = _pre_conn.execute(
++            "SELECT * FROM pv_case_assessments WHERE case_uid = ?",
++            (case_uid,),
++        ).fetchone()
++        _pre_subs = _pre_conn.execute(
++            "SELECT * FROM pv_ind_submissions WHERE case_uid = ? ORDER BY sequence_num ASC",
++            (case_uid,),
++        ).fetchall()
++
+     _sync_blinded_projections_for_reports(paths, case_uid, report_ids, now_iso)
+ 
+-    # Serialize concurrent workers on PV database write lock and re-read current PV state
+     with connect_pv(paths) as pv_conn:
+-        pv_conn.execute("BEGIN IMMEDIATE")
+-        pv_row = pv_conn.execute(
+-            "SELECT * FROM pv_case_assessments WHERE case_uid = ?",
+-            (case_uid,),
+-        ).fetchone()
+ 
+         unblinded = bool(pv_row["unblinded"]) if pv_row is not None else False
+         treatment_arm = pv_row["treatment_arm"] if pv_row is not None else None
+@@ -989,10 +992,7 @@
+                 ),
+             )
+ 
+-        subs = pv_conn.execute(
+-            "SELECT * FROM pv_ind_submissions WHERE case_uid = ? ORDER BY sequence_num ASC",
+-            (case_uid,),
+-        ).fetchall()
++        subs = _pre_subs
+ 
+         if not subs:
+             # Find chronological report that first crossed the 3-leg SUSAR threshold

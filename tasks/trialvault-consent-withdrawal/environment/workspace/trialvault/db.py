@@ -202,31 +202,9 @@ CREATE TABLE IF NOT EXISTS outbox_events (
     processed_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS audit_log (
-    seq_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_time TEXT NOT NULL,
-    site_id TEXT NOT NULL,
-    actor TEXT NOT NULL,
-    action TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_ref TEXT NOT NULL,
-    payload_hash TEXT NOT NULL,
-    prev_hash TEXT NOT NULL,
-    entry_hash TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS audit_pii_details (
-    detail_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    seq_id INTEGER NOT NULL REFERENCES audit_log(seq_id),
-    subject_id TEXT NOT NULL,
-    site_id TEXT NOT NULL,
-    detail_json TEXT NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_subjects_site ON subjects(site_id);
 CREATE INDEX IF NOT EXISTS idx_subjects_mrn ON subjects(mrn);
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox_events(status, created_at);
-CREATE INDEX IF NOT EXISTS idx_audit_pii_subject ON audit_pii_details(subject_id);
 CREATE INDEX IF NOT EXISTS idx_sched_due ON scheduled_jobs(status, run_after);
 CREATE INDEX IF NOT EXISTS idx_webhook_inbox_subj ON webhook_inbox(subject_id);
 """
@@ -252,10 +230,15 @@ def connect_edc(db_path: Path) -> sqlite3.Connection:
 
 
 def init_edc_db(paths: DataPaths) -> None:
+    from trialvault.audit import init_audit_db
+    from trialvault.warehouse.sdtm import init_sdtm_db
+
     ensure_data_dirs(paths)
     with connect_edc(paths.edc_db) as conn:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
+    init_audit_db(paths)
+    init_sdtm_db(paths)
 
 
 def lookup_site_by_token(conn: sqlite3.Connection, bearer_token: str) -> dict[str, Any] | None:

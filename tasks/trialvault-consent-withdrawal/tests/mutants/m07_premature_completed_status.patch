@@ -1,11 +1,11 @@
 --- a/trialvault/withdrawal.py
 +++ b/trialvault/withdrawal.py
-@@ -306,9 +306,9 @@
+@@ -314,9 +314,9 @@
              INSERT INTO withdrawal_requests (
                  request_id, site_id, trial_id, subject_id_hash, scope, anon_subject_ref,
-                 effective_date, status, reason, requested_by, created_at, completed_at, error
--            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL)
-+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, NULL)
+                 effective_date, status, reason, requested_by, lease_owner, created_at, completed_at, error
+-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, ?, NULL, NULL)
++            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?, NULL, ?, ?, NULL)
              """,
 -            (request_id, site_id, trial_id, subj_hash, scope, anon_ref, eff_date, reason, requested_by, now),
 +            (request_id, site_id, trial_id, subj_hash, scope, anon_ref, eff_date, reason, requested_by, now, now),

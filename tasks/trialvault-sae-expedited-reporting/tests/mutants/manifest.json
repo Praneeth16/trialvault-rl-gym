@@ -1,0 +1,99 @@
+[
+  {
+    "id": "m01_eager_unblind_all_e2b",
+    "patch": "m01_eager_unblind_all_e2b.patch",
+    "description": "Calls IWRS unblinding lookup eagerly before checking the 3-legged SUSAR gate, violating ICH E9 selective unblinding",
+    "must_fail_checks": [
+      "non_susar_cases_never_query_iwrs"
+    ]
+  },
+  {
+    "id": "m02_investigator_only_causality",
+    "patch": "m02_investigator_only_causality.patch",
+    "description": "Evaluates suspected causality from investigator_causality only, ignoring sponsor_causality under 21 CFR 312.32",
+    "must_fail_checks": [
+      "or_causality_sponsor_overrides_unrelated_investigator"
+    ]
+  },
+  {
+    "id": "m03_rsi_grade_escalation_ignored",
+    "patch": "m03_rsi_grade_escalation_ignored.patch",
+    "description": "Treats any MedDRA PT listed in the IB RSI as expected even when ctcae_grade exceeds max_expected_grade",
+    "must_fail_checks": [
+      "rsi_severity_exceeded_marks_unexpected"
+    ]
+  },
+  {
+    "id": "m04_placebo_submitted_to_fda",
+    "patch": "m04_placebo_submitted_to_fda.patch",
+    "description": "Transmits expedited IND safety reports to FDA even when unblinded arm is non-investigational PLACEBO",
+    "must_fail_checks": [
+      "placebo_susar_candidate_closed_without_fda_submission"
+    ]
+  },
+  {
+    "id": "m05_arm_leaked_in_blinded_listing",
+    "patch": "m05_arm_leaked_in_blinded_listing.patch",
+    "description": "Writes unblinded SUSAR status into blinded safety_cases.site_status, leaking arm/SUSAR disposition to site endpoints and listings",
+    "must_fail_checks": [
+      "blinded_case_endpoint_zero_arm_or_susar_leak",
+      "site_blinded_line_listing_and_checksum"
+    ]
+  },
+  {
+    "id": "m06_fts_search_not_updated",
+    "patch": "m06_fts_search_not_updated.patch",
+    "description": "Omits FTS5 search index update when converging E2B safety cases",
+    "must_fail_checks": [
+      "blinded_sqlite_fts_and_cache_zero_leak"
+    ]
+  },
+  {
+    "id": "m07_day0_uses_initial_non_susar_aware_at",
+    "patch": "m07_day0_uses_initial_non_susar_aware_at.patch",
+    "description": "Anchors Day-0 to followup_num=0 aware_at instead of the chronological report that first satisfied all three SUSAR legs",
+    "must_fail_checks": [
+      "delayed_susar_qualification_sets_threshold_day0"
+    ]
+  },
+  {
+    "id": "m08_no_retroactive_7day_tightening",
+    "patch": "m08_no_retroactive_7day_tightening.patch",
+    "description": "Fails to retroactively tighten an unsubmitted 15-day initial submission to 7_day when fatal/life-threatening follow-up arrives",
+    "must_fail_checks": [
+      "pre_submission_15d_to_7d_retroactive_tightening"
+    ]
+  },
+  {
+    "id": "m09_benign_followup_spawns_duplicate_submission",
+    "patch": "m09_benign_followup_spawns_duplicate_submission.patch",
+    "description": "Creates a follow-up FDA IND submission on benign narrative amendments without grade increase or new seriousness flag",
+    "must_fail_checks": [
+      "post_submission_followup_vs_benign_amendment"
+    ]
+  },
+  {
+    "id": "m10_nack_marked_submitted_anyway",
+    "patch": "m10_nack_marked_submitted_anyway.patch",
+    "description": "Ignores retryable NACK from FDA gateway and prematurely marks submission submitted with IND_SAFETY_SUBMITTED audit",
+    "must_fail_checks": [
+      "gateway_nack_marks_retry_pending_not_submitted"
+    ]
+  },
+  {
+    "id": "m11_out_of_order_followup_overwrites_narrative",
+    "patch": "m11_out_of_order_followup_overwrites_narrative.patch",
+    "description": "Uses arrival order instead of highest followup_num when merging case reports, letting delayed lower follow-ups overwrite narrative",
+    "must_fail_checks": [
+      "out_of_order_followup_monotonic_projection"
+    ]
+  },
+  {
+    "id": "m12_concurrent_worker_double_submit",
+    "patch": "m12_concurrent_worker_double_submit.patch",
+    "description": "Drops atomic write-lock serialization around SUSAR triage/unblinding so concurrent workers double-unblind and double-submit",
+    "must_fail_checks": [
+      "concurrent_workers_single_submission_and_unblind"
+    ]
+  }
+]

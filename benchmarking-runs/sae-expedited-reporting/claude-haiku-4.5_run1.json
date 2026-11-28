@@ -1,0 +1,335 @@
+{
+  "timestamp_utc": "2026-11-28T18:20:41.074948+00:00",
+  "task": "praneeth16/trialvault-sae-expedited-reporting",
+  "task_slug": "trialvault-sae-expedited-reporting",
+  "label": "claude-haiku-4.5",
+  "harness": "claude",
+  "model": "haiku",
+  "run_index": 1,
+  "agent_exit_code": 0,
+  "elapsed_sec": 500.14,
+  "changed_files": [
+    "M README.md",
+    " M tests/__pycache__/test_baseline_pv.cpython-312-pytest-9.2.0.pyc",
+    " M trialvault_pv/__pycache__/api.cpython-312.pyc",
+    " M trialvault_pv/__pycache__/config.cpython-312.pyc",
+    " M trialvault_pv/__pycache__/db.cpython-312.pyc",
+    " M trialvault_pv/__pycache__/service.cpython-312.pyc",
+    " M trialvault_pv/__pycache__/worker.cpython-312.pyc",
+    " M trialvault_pv/api.py",
+    " M trialvault_pv/config.py",
+    " M trialvault_pv/db.py",
+    " M trialvault_pv/service.py",
+    " M trialvault_pv/worker.py",
+    "?? tests/__pycache__/test_expedited_sae.cpython-312-pytest-9.2.0.pyc",
+    "?? tests/test_expedited_sae.py",
+    "?? trialvault_pv/__pycache__/e2b.cpython-312.pyc",
+    "?? trialvault_pv/__pycache__/pv_workflow.cpython-312.pyc",
+    "?? trialvault_pv/__pycache__/triage.cpython-312.pyc",
+    "?? trialvault_pv/e2b.py",
+    "?? trialvault_pv/pv_workflow.py",
+    "?? trialvault_pv/triage.py"
+  ],
+  "scores": {
+    "baseline_pv_preservation": 1.0,
+    "blinding_wall_and_projections": 1.0,
+    "day0_clock_and_tightening": 1.0,
+    "e2b_api_and_idempotency": 1.0,
+    "fda_gateway_and_fault_recovery": 1.0,
+    "part11_audit_and_concurrency": 1.0,
+    "selective_unblinding_and_iwrs": 1.0,
+    "susar_triage_and_rsi": 1.0,
+    "reward": 1.0
+  },
+  "details": {
+    "baseline_pv_preservation": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "existing_subjects_and_blinded_summary_intact",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 2.5,
+          "description": "TrialVault PV black-box check: existing_subjects_and_blinded_summary_intact",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] summary={'trial_id': 'TRIAL-R009122', 'protocol_code': 'PROT-R009122', 'phase': 'Phase III', 'total_subjects': 10, 'total_safety_cases': 19, 'serious_safety_cases': 17}, expected=(10,19,17)"
+        },
+        {
+          "name": "post_sae_enrollment_search_and_health_workflows",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 2.5,
+          "description": "TrialVault PV black-box check: post_sae_enrollment_search_and_health_workflows",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] enr=201, e2b=202, search_hits=1, chain=True"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "blinding_wall_and_projections": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "blinded_case_endpoint_zero_arm_or_susar_leak",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: blinded_case_endpoint_zero_arm_or_susar_leak",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] statuses=(assessed,assessed,assessed), leaks=[]"
+        },
+        {
+          "name": "blinded_sqlite_fts_and_cache_zero_leak",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: blinded_sqlite_fts_and_cache_zero_leak",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] store_leaks=[], s1_own=1, s1_s2=0, s2_own=1"
+        },
+        {
+          "name": "site_blinded_line_listing_and_checksum",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: site_blinded_line_listing_and_checksum",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] http=200, checksum=True, disk_ok=True, count=11, leaks=[]"
+        },
+        {
+          "name": "dsmb_unblinded_susar_listing_and_checksum",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: dsmb_unblinded_susar_listing_and_checksum",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] http=200, checksum=True, dsmb_uids=['CASE-15D-R009122', 'CASE-7D-R009122', 'CASE-ORCAUS-R009122', 'CASE-RSIGRD-R009122', 'CASE-RSILT-R009122', 'CASE-S2-R009122']"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "day0_clock_and_tightening": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "fifteen_day_and_seven_day_initial_clocks",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: fifteen_day_and_seven_day_initial_clocks",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] 15d=(15_day,2026-03-01T10:00:00+00:00->2026-03-16T10:00:00+00:00), 7d=(7_day,2026-03-03T06:00:00+00:00->2026-03-10T06:00:00+00:00)"
+        },
+        {
+          "name": "delayed_susar_qualification_sets_threshold_day0",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: delayed_susar_qualification_sets_threshold_day0",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] day0=2026-03-07T14:30:00+00:00 (expected 2026-03-07T14:30:00+00:00), due=2026-03-22T14:30:00+00:00"
+        },
+        {
+          "name": "pre_submission_15d_to_7d_retroactive_tightening",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: pre_submission_15d_to_7d_retroactive_tightening",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] tight_a=[{'submission_id': 'SUB-27FA031EC0BA', 'case_uid': 'CASE-TIGHTA-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'initial', 'parent_submission_id': None, 'sequence_num': 1, 'report_clock': '7_day', 'day0_at': '2026-03-05T10:00:00+00:00', 'due_at': '2026-03-14T10:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-27A09C425398', 'submitted_at': '2026-03-16T10:15:00+00:00', 'last_error': None}], tight_b=[{'submission_id': 'SUB-FE6DC7AF4686', 'case_uid': 'CASE-TIGHTB-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'initial', 'parent_submission_id': None, 'sequence_num': 1, 'report_clock': '7_day', 'day0_at': '2026-03-05T10:00:00+00:00', 'due_at': '2026-03-20T10:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-716623814982', 'submitted_at': '2026-03-16T10:15:00+00:00', 'last_error': None}]"
+        },
+        {
+          "name": "post_submission_followup_vs_benign_amendment",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: post_submission_followup_vs_benign_amendment",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] after_benign=1, after_escal=[{'submission_id': 'SUB-C324AE835B28', 'case_uid': 'CASE-15D-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'initial', 'parent_submission_id': None, 'sequence_num': 1, 'report_clock': '15_day', 'day0_at': '2026-03-01T10:00:00+00:00', 'due_at': '2026-03-16T10:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-1BA829A7F57F', 'submitted_at': '2026-03-03T16:00:00+00:00', 'last_error': None}, {'submission_id': 'SUB-2AF249A07F5F', 'case_uid': 'CASE-15D-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'followup', 'parent_submission_id': 'SUB-C324AE835B28', 'sequence_num': 2, 'report_clock': '7_day', 'day0_at': '2026-03-09T11:00:00+00:00', 'due_at': '2026-03-16T11:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-92D38147F046', 'submitted_at': '2026-03-09T11:10:00+00:00', 'last_error': None}]"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "e2b_api_and_idempotency": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "e2b_post_returns_202_received",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: e2b_post_returns_202_received",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] post=202 body={'case_uid': 'CASE-15D-R009122', 'message_id': 'MSG-15D-0-R009122', 'followup_num': 0, 'site_status': 'received', 'aware_at': '2026-03-01T10:00:00+00:00'}, blinded_pre=200/received, pv_pre=200/pending_assessment, iwrs_pre={}, e2b_audit=1"
+        },
+        {
+          "name": "auth_and_tenant_site_enforcement",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: auth_and_tenant_site_enforcement",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] 401s=(401,401), 403s=(403,403,403,403,403,403), 404s=(404,404,404)"
+        },
+        {
+          "name": "idempotency_key_replay_and_conflict",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: idempotency_key_replay_and_conflict",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] replay=202/MSG-15D-0-R009122, conflict=409/{'error': 'idempotency_key_conflict', 'detail': 'Idempotency-Key already bound to a different case_uid'}, audits=1"
+        },
+        {
+          "name": "followup_duplicate_vs_conflict_409",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 2.5,
+          "description": "TrialVault PV black-box check: followup_duplicate_vs_conflict_409",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] same_msg=202, diff_msg=409/{'error': 'duplicate_followup_conflict', 'detail': 'Conflicting report for (case_uid, followup_num) or message_id'}"
+        },
+        {
+          "name": "out_of_order_followup_monotonic_projection",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 2.5,
+          "description": "TrialVault PV black-box check: out_of_order_followup_monotonic_projection",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] pre_ok=True, post={'case_uid': 'CASE-OOO-R009122', 'subject_id': 'SUBJ-D2-R009122', 'site_id': 'SITE1-R009122', 'trial_id': 'TRIAL-R009122', 'site_status': 'assessed', 'latest_followup_num': 2, 'meddra_pt': 'Neutropenia', 'ctcae_grade': 3, 'is_serious': True, 'seriousness': {'death': False, 'life_threatening': False, 'hospitalization': True, 'disability': False, 'congenital_anomaly': False, 'medically_important': True}, 'investigator_causality': 'possibly_related', 'sponsor_causality': None, 'narrative': 'Newest F2 authoritative narrative R009122'}"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "fda_gateway_and_fault_recovery": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "fda_gateway_payload_meta_and_ack_log",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: fda_gateway_payload_meta_and_ack_log",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] subs_count=6, sub_15d={'submission_id': 'SUB-C324AE835B28', 'case_uid': 'CASE-15D-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'initial', 'parent_submission_id': None, 'sequence_num': 1, 'report_clock': '15_day', 'day0_at': '2026-03-01T10:00:00+00:00', 'due_at': '2026-03-16T10:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-1BA829A7F57F', 'submitted_at': '2026-03-03T16:00:00+00:00', 'last_error': None}, gw_files_ok=True"
+        },
+        {
+          "name": "gateway_nack_marks_retry_pending_not_submitted",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: gateway_nack_marks_retry_pending_not_submitted",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] nack_blocked=True, nack_recovered=True"
+        },
+        {
+          "name": "filesystem_fault_blocks_false_submission_and_recovers",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 2.5,
+          "description": "TrialVault PV black-box check: filesystem_fault_blocks_false_submission_and_recovers",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] fs_blocked=True, after=[{'submission_id': 'SUB-132582B70AE7', 'case_uid': 'CASE-FSFLT-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'initial', 'parent_submission_id': None, 'sequence_num': 1, 'report_clock': '15_day', 'day0_at': '2026-03-10T08:00:00+00:00', 'due_at': '2026-03-25T08:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-45EF2CB62EC1', 'submitted_at': '2026-03-10T08:15:00+00:00', 'last_error': None}]"
+        },
+        {
+          "name": "audit_db_abort_trigger_prevents_split_brain_and_recovers",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 2.5,
+          "description": "TrialVault PV black-box check: audit_db_abort_trigger_prevents_split_brain_and_recovers",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] blocked=True, after_subs=[{'submission_id': 'SUB-592D32D2D3F2', 'case_uid': 'CASE-AUDFLT-R009122', 'trial_id': 'TRIAL-R009122', 'submission_type': 'initial', 'parent_submission_id': None, 'sequence_num': 1, 'report_clock': '7_day', 'day0_at': '2026-03-11T09:00:00+00:00', 'due_at': '2026-03-18T09:00:00+00:00', 'status': 'submitted', 'gateway_ack_id': 'ESG-ACK-E3EFF88AA2FE', 'submitted_at': '2026-03-11T09:10:00+00:00', 'last_error': None}], audit_events=1, chain_ok=True"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "part11_audit_and_concurrency": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "part11_hash_chain_intact_across_lifecycle",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.5,
+          "description": "TrialVault PV black-box check: part11_hash_chain_intact_across_lifecycle",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] chain=True (verified 49 entries), e2b_audits=25/25"
+        },
+        {
+          "name": "ind_safety_submitted_logged_only_on_ack",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: ind_safety_submitted_logged_only_on_ack",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] submitted_subs=14, ind_audits=14, forbidden=0"
+        },
+        {
+          "name": "concurrent_workers_single_submission_and_unblind",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.5,
+          "description": "TrialVault PV black-box check: concurrent_workers_single_submission_and_unblind",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] rcs=[0, 0, 0, 0], subs=1, iwrs=1, ind_audits=1, chain=True"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "selective_unblinding_and_iwrs": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "non_susar_cases_never_query_iwrs",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: non_susar_cases_never_query_iwrs",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] iwrs_counts={'CASE-15D-R009122': 1, 'CASE-7D-R009122': 1, 'CASE-ORCAUS-R009122': 1, 'CASE-PLB-R009122': 1, 'CASE-RSIGRD-R009122': 1, 'CASE-RSILT-R009122': 1, 'CASE-S2-R009122': 1}"
+        },
+        {
+          "name": "placebo_susar_candidate_closed_without_fda_submission",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: placebo_susar_candidate_closed_without_fda_submission",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] pv_plb={'case_uid': 'CASE-PLB-R009122', 'subject_id': 'SUBJ-PLB-R009122', 'trial_id': 'TRIAL-R009122', 'site_id': 'SITE1-R009122', 'pv_status': 'closed_non_investigational', 'is_serious': True, 'is_suspected': True, 'is_unexpected': True, 'unblinded': True, 'treatment_arm': 'PLACEBO', 'report_clock': None, 'day0_at': None, 'due_at': None, 'latest_followup_num': 0, 'submissions': []}, iwrs=1"
+        },
+        {
+          "name": "single_iwrs_unblind_audit_across_followups_and_retries",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 4.0,
+          "description": "TrialVault PV black-box check: single_iwrs_unblind_audit_across_followups_and_retries",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] c15d=1, tightA=1, tightB=1, plb=1"
+        }
+      ],
+      "kind": "programmatic"
+    },
+    "susar_triage_and_rsi": {
+      "score": 1.0,
+      "criteria": [
+        {
+          "name": "three_legged_susar_positive_triage",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.5,
+          "description": "TrialVault PV black-box check: three_legged_susar_positive_triage",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] pv_15d=susar_submitted/DRUG_NVX_R009122, pv_7d=susar_submitted"
+        },
+        {
+          "name": "or_causality_sponsor_overrides_unrelated_investigator",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.5,
+          "description": "TrialVault PV black-box check: or_causality_sponsor_overrides_unrelated_investigator",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] sponsor_related=susar_submitted, both_unrelated=not_susar"
+        },
+        {
+          "name": "rsi_expected_term_and_grade_not_susar",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: rsi_expected_term_and_grade_not_susar",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] rsi_exp=not_susar/unexp=False, nonser=not_susar"
+        },
+        {
+          "name": "rsi_severity_exceeded_marks_unexpected",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: rsi_severity_exceeded_marks_unexpected",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] rsi_grade_exc=susar_submitted/unexp=True"
+        },
+        {
+          "name": "rsi_fatal_or_lt_on_nonfatal_term_unexpected",
+          "value": 1.0,
+          "raw": 1.0,
+          "weight": 3.0,
+          "description": "TrialVault PV black-box check: rsi_fatal_or_lt_on_nonfatal_term_unexpected",
+          "reasoning": "[min of 3 fresh runs: [1.0, 1.0, 1.0]] rsi_lt=susar_submitted/clock=7_day"
+        }
+      ],
+      "kind": "programmatic"
+    }
+  },
+  "agent_stderr_tail": ""
+}

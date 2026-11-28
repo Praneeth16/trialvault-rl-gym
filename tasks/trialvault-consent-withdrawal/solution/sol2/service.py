@@ -1,4 +1,4 @@
-"""SOLUTION=2 (v2) patched service.py (uses saga_engine suppression digests + FDA pre-vs-post specimen rule)."""
+"""SOLUTION=2 (v4) patched service.py (uses saga_engine suppression digests + SDTM + monitoring + separate Part 11 audit)."""
 
 from __future__ import annotations
 
@@ -8,11 +8,12 @@ import sqlite3
 import uuid
 from typing import Any
 
-from trialvault.audit import append_audit_event
+from trialvault.audit import record_audit_entry
 from trialvault.blobs import BlobStore
 from trialvault.cache import ProjectionCache
 from trialvault.config import DataPaths
 from trialvault.db import connect_edc, utc_now_iso
+from trialvault.monitoring.sdv_feed import append_enrollment_log_entry, append_sdv_item
 from trialvault.saga_engine import (
     ContactWithdrawnError,
     check_contact_blocked,
@@ -21,6 +22,14 @@ from trialvault.saga_engine import (
 )
 from trialvault.search import SearchIndex
 from trialvault.spool import SpoolStore
+from trialvault.warehouse.sdtm import (
+    connect_sdtm,
+    init_sdtm_db,
+    record_sdtm_ae,
+    record_sdtm_lab,
+    record_sdtm_subject,
+    record_sdtm_visit,
+)
 
 
 def opaque_audit_ref(prefix: str, raw_id: str) -> str:
@@ -121,13 +130,6 @@ def enroll_subject(paths: DataPaths, *, site_id: str, trial_id: str, actor: str,
                 data.get("household_group_id"), data.get("investigator_name", "Dr. Hannah Lin"), json.dumps(data.get("aliases") or []), now, now,
             ),
         )
-        append_audit_event(
-            conn, site_id=site_id, actor=actor, action="SUBJECT_ENROLLED", resource_type="subject",
-            resource_ref=opaque_audit_ref("subj", subject_id),
-            structural_payload={"trial_id": trial_id, "treatment_arm": data["treatment_arm"]},
-            pii_subject_id=subject_id,
-            pii_detail={"subject_id": subject_id, "mrn": data["mrn"], "full_name": data["full_name"], "email": data["email"], "phone": data["phone"], "ssn": data["ssn"], "dob": data["dob"]},
-        )
         enqueue_outbox(conn, event_type="subject.enrolled", aggregate_id=subject_id, site_id=site_id, payload={"subject_id": subject_id, "trial_id": trial_id, "site_id": site_id, "mrn": data["mrn"], "full_name": data["full_name"]})
         schedule_delayed_job(
             conn, job_type="epro.day30_followup", subject_id=subject_id, site_id=site_id,
@@ -136,6 +138,16 @@ def enroll_subject(paths: DataPaths, *, site_id: str, trial_id: str, actor: str,
         )
         conn.commit()
         row = dict(conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone())
+
+    record_audit_entry(
+        paths, site_id=site_id, actor=actor, action="SUBJECT_ENROLLED", resource_type="subject",
+        resource_ref=opaque_audit_ref("subj", subject_id),
+        structural_payload={"trial_id": trial_id, "treatment_arm": data["treatment_arm"]},
+        pii_subject_id=subject_id,
+        pii_detail={"subject_id": subject_id, "mrn": data["mrn"], "full_name": data["full_name"], "email": data["email"], "phone": data["phone"], "ssn": data["ssn"], "dob": data["dob"]},
+    )
+    record_sdtm_subject(paths, trial_id=trial_id, site_id=site_id, subject_row=row)
+    append_enrollment_log_entry(paths, site_id=site_id, trial_id=trial_id, subject_row=row)
     BlobStore(paths.blobs_dir).put_json(
         f"econsent/{site_id}/{subject_id}_signed.json",
         payload={"subject_id": subject_id, "mrn": data["mrn"], "full_name": data["full_name"], "dob": data["dob"], "email": data["email"], "street_address": data["street_address"], "signature_ip": data["ip_address"], "signed_at": now, "consent_version": "v3.2"},
@@ -157,15 +169,23 @@ def record_visit(paths: DataPaths, *, site_id: str, subject_id: str, actor: str,
             "INSERT INTO visits (visit_id, subject_id, site_id, visit_number, visit_date, days_from_randomization, systolic_bp, diastolic_bp, clinical_notes, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (visit_id, subject_id, site_id, int(data["visit_number"]), data["visit_date"], int(data["days_from_randomization"]), int(data["systolic_bp"]), int(data["diastolic_bp"]), data["clinical_notes"], json.dumps(data.get("metadata", {}), sort_keys=True)),
         )
-        append_audit_event(
-            conn, site_id=site_id, actor=actor, action="VISIT_RECORDED", resource_type="visit",
-            resource_ref=opaque_audit_ref("visit", visit_id),
-            structural_payload={"visit_number": int(data["visit_number"])},
-            pii_subject_id=subject_id, pii_detail={"subject_id": subject_id, "visit_date": data["visit_date"], "notes": data["clinical_notes"]},
-        )
         enqueue_outbox(conn, event_type="visit.recorded", aggregate_id=subject_id, site_id=site_id, payload={"visit_id": visit_id, "subject_id": subject_id, "mrn": subj["mrn"], "clinical_notes": data["clinical_notes"]})
         conn.commit()
-        return dict(conn.execute("SELECT * FROM visits WHERE visit_id = ?", (visit_id,)).fetchone())
+        visit_row = dict(conn.execute("SELECT * FROM visits WHERE visit_id = ?", (visit_id,)).fetchone())
+        subj_dict = dict(subj)
+
+    record_audit_entry(
+        paths, site_id=site_id, actor=actor, action="VISIT_RECORDED", resource_type="visit",
+        resource_ref=opaque_audit_ref("visit", visit_id),
+        structural_payload={"visit_number": int(data["visit_number"])},
+        pii_subject_id=subject_id, pii_detail={"subject_id": subject_id, "visit_date": data["visit_date"], "notes": data["clinical_notes"]},
+    )
+    record_sdtm_visit(paths, trial_id=subj_dict["trial_id"], site_id=site_id, subject_id=subject_id, visit_row=visit_row)
+    append_sdv_item(
+        paths, site_id,
+        {"item_type": "visit", "ref_id": visit_id, "subject_id": subject_id, "mrn": subj_dict.get("mrn"), "patient_name": subj_dict.get("full_name"), "study_day": int(data["days_from_randomization"]), "recorded_date": data["visit_date"], "note": data["clinical_notes"]},
+    )
+    return visit_row
 
 
 def record_adverse_event(paths: DataPaths, *, site_id: str, subject_id: str, actor: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -186,15 +206,22 @@ def record_adverse_event(paths: DataPaths, *, site_id: str, subject_id: str, act
             "INSERT INTO medical_coding_queue (coding_id, ae_id, subject_id, site_id, verbatim_term, coded_meddra_pt, coder_notes, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'coded', ?)",
             (coding_id, ae_id, subject_id, site_id, f"{data['meddra_term']} reported for {subj['full_name']} ({subj['mrn']})", data["meddra_term"], f"Coded from AE {ae_id} ({subj['email']}): {data['reporter_notes']}", now),
         )
-        append_audit_event(
-            conn, site_id=site_id, actor=actor, action="ADVERSE_EVENT_RECORDED", resource_type="adverse_event",
-            resource_ref=opaque_audit_ref("ae", ae_id),
-            structural_payload={"meddra_term": data["meddra_term"], "ctcae_grade": int(data["ctcae_grade"])},
-            pii_subject_id=subject_id, pii_detail={"subject_id": subject_id, "onset_date": data["onset_date"], "reporter_notes": data["reporter_notes"]},
-        )
         enqueue_outbox(conn, event_type="ae.recorded", aggregate_id=subject_id, site_id=site_id, payload={"ae_id": ae_id, "subject_id": subject_id, "trial_id": subj["trial_id"], "mrn": subj["mrn"]})
         conn.commit()
         row = dict(conn.execute("SELECT * FROM adverse_events WHERE ae_id = ?", (ae_id,)).fetchone())
+        subj_dict = dict(subj)
+
+    record_audit_entry(
+        paths, site_id=site_id, actor=actor, action="ADVERSE_EVENT_RECORDED", resource_type="adverse_event",
+        resource_ref=opaque_audit_ref("ae", ae_id),
+        structural_payload={"meddra_term": data["meddra_term"], "ctcae_grade": int(data["ctcae_grade"])},
+        pii_subject_id=subject_id, pii_detail={"subject_id": subject_id, "onset_date": data["onset_date"], "reporter_notes": data["reporter_notes"]},
+    )
+    record_sdtm_ae(paths, trial_id=subj_dict["trial_id"], site_id=site_id, subject_id=subject_id, ae_row=row)
+    append_sdv_item(
+        paths, site_id,
+        {"item_type": "adverse_event", "ref_id": ae_id, "subject_id": subject_id, "mrn": subj_dict.get("mrn"), "patient_name": subj_dict.get("full_name"), "study_day": int(data["onset_study_day"]), "recorded_date": data["onset_date"], "note": data["reporter_notes"]},
+    )
     ProjectionCache(paths.cache_file).delete(f"trial:{row['trial_id']}:safety_summary")
     return row
 
@@ -224,6 +251,14 @@ def schedule_epro_reminder(paths: DataPaths, *, site_id: str, subject_id: str, d
             enqueue_outbox(conn, event_type="epro.scheduled", aggregate_id=subject_id, site_id=site_id, payload={"notif_id": notif_id, "subject_id": subject_id, "mrn": subj["mrn"], "recipient": recipient, "full_name": subj["full_name"]})
         conn.commit()
         return dict(conn.execute("SELECT * FROM epro_notifications WHERE notif_id = ?", (notif_id,)).fetchone())
+
+
+def _resolve_sdtm_key(paths: DataPaths, anon_ref: str, fallback: str) -> str:
+    init_sdtm_db(paths)
+    with connect_sdtm(paths.sdtm_db) as conn:
+        if conn.execute("SELECT 1 FROM sdtm_dm WHERE usubjid = ?", (anon_ref,)).fetchone():
+            return anon_ref
+    return fallback
 
 
 def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -268,12 +303,18 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
                 "INSERT INTO lab_results (lab_id, subject_id, trial_id, site_id, accession_no, analyte, value_num, unit, reference_flag, collected_date, study_day, raw_hl7_json, blob_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
                 (lab_id, subj_key, trial_id, site_id, accession_no, payload["analyte"], float(payload["value_num"]), payload["unit"], payload.get("reference_flag", "NORMAL"), int(payload["study_day"]), json.dumps(clean_hl7, sort_keys=True), blob_key),
             )
-            append_audit_event(
-                conn, site_id=site_id, actor="central-lab-webhook", action="LAB_RESULT_INGESTED_DEIDENTIFIED",
+            conn.commit()
+            record_audit_entry(
+                paths, site_id=site_id, actor="central-lab-webhook", action="LAB_RESULT_INGESTED_DEIDENTIFIED",
                 resource_type="lab_result", resource_ref=opaque_audit_ref("lab", accession_no),
                 structural_payload={"analyte": payload["analyte"], "study_day": int(payload["study_day"]), "anon_subject_ref": anon_ref},
             )
-            conn.commit()
+            record_sdtm_lab(
+                paths, trial_id=trial_id, site_id=site_id, subject_id=_resolve_sdtm_key(paths, anon_ref, subj_key),
+                lab_id=lab_id, accession_no=accession_no, analyte=payload["analyte"], value_num=float(payload["value_num"]),
+                unit=payload["unit"], reference_flag=payload.get("reference_flag", "NORMAL"),
+                collected_date=None, study_day=int(payload["study_day"]),
+            )
             BlobStore(paths.blobs_dir).put_json(
                 blob_key,
                 payload={"accession_no": accession_no, "anon_subject_ref": anon_ref, "study_day": int(payload["study_day"]), "results": [{"analyte": payload["analyte"], "value_num": float(payload["value_num"]), "unit": payload["unit"], "reference_flag": payload.get("reference_flag", "NORMAL")}]},
@@ -320,16 +361,23 @@ def ingest_central_lab_webhook(paths: DataPaths, payload: dict[str, Any]) -> tup
             "INSERT INTO lab_results (lab_id, subject_id, trial_id, site_id, accession_no, analyte, value_num, unit, reference_flag, collected_date, study_day, raw_hl7_json, blob_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (lab_id, resolved_subject_id, trial_id, site_id, accession_no, payload["analyte"], float(payload["value_num"]), payload["unit"], payload.get("reference_flag", "NORMAL"), payload["collected_date"], int(payload["study_day"]), json.dumps(raw_hl7, sort_keys=True), blob_key),
         )
-        append_audit_event(
-            conn, site_id=site_id, actor="central-lab-webhook", action="LAB_RESULT_INGESTED",
-            resource_type="lab_result", resource_ref=opaque_audit_ref("lab", accession_no),
-            structural_payload={"analyte": payload["analyte"], "study_day": int(payload["study_day"])},
-            pii_subject_id=resolved_subject_id,
-            pii_detail={"subject_id": resolved_subject_id, "mrn": raw_hl7["PID"]["mrn"], "patient_name": raw_hl7["PID"]["patient_name"]},
-        )
-        enqueue_outbox(conn, event_type="lab.received", aggregate_id=resolved_subject_id, site_id=site_id, payload={"lab_id": lab_id, "subject_id": resolved_subject_id, "mrn": raw_hl7["PID"]["mrn"], "accession_no": accession_no})
+        enqueue_outbox(conn, event_type="lab.received", aggregate_id=resolved_subject_id, site_id=site_id, payload={"lab_id": lab_id, "subject_id": resolved_subject_id, "trial_id": trial_id, "mrn": raw_hl7["PID"]["mrn"], "accession_no": accession_no})
         conn.commit()
+        eff_mrn = raw_hl7["PID"]["mrn"]
 
+    record_audit_entry(
+        paths, site_id=site_id, actor="central-lab-webhook", action="LAB_RESULT_INGESTED",
+        resource_type="lab_result", resource_ref=opaque_audit_ref("lab", accession_no),
+        structural_payload={"analyte": payload["analyte"], "study_day": int(payload["study_day"])},
+        pii_subject_id=resolved_subject_id,
+        pii_detail={"subject_id": resolved_subject_id, "mrn": eff_mrn, "patient_name": raw_hl7["PID"]["patient_name"]},
+    )
+    record_sdtm_lab(
+        paths, trial_id=trial_id, site_id=site_id, subject_id=resolved_subject_id, lab_id=lab_id,
+        accession_no=accession_no, analyte=payload["analyte"], value_num=float(payload["value_num"]),
+        unit=payload["unit"], reference_flag=payload.get("reference_flag", "NORMAL"),
+        collected_date=payload["collected_date"], study_day=int(payload["study_day"]),
+    )
     BlobStore(paths.blobs_dir).put_json(
         blob_key,
         payload={

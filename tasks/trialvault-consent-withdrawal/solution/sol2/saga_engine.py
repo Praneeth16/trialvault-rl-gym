@@ -1,4 +1,4 @@
-"""SOLUTION=2 (v2): Checkpointed Saga State Machine for consent withdrawal."""
+"""SOLUTION=2 (v4): Checkpointed Multi-Store Saga State Machine for consent withdrawal."""
 
 from __future__ import annotations
 
@@ -7,12 +7,18 @@ import sqlite3
 import uuid
 from typing import Any
 
-from trialvault.audit import append_audit_event
+from trialvault.audit import append_audit_event, connect_audit, init_audit_db
 from trialvault.blobs import BlobStore
 from trialvault.cache import ProjectionCache
 from trialvault.config import DataPaths
 from trialvault.db import connect_edc, utc_now_iso
 from trialvault.exports import write_snapshot_atomic
+from trialvault.monitoring.sdv_feed import (
+    enrollment_log_paths,
+    read_sdv_items,
+    replace_sdv_items,
+    write_enrollment_log_signed,
+)
 from trialvault.safeharbor import (
     digest_identifier,
     extract_sensitive_strings,
@@ -23,6 +29,7 @@ from trialvault.safeharbor import (
 )
 from trialvault.search import SearchIndex
 from trialvault.spool import SpoolStore
+from trialvault.warehouse.sdtm import connect_sdtm, init_sdtm_db
 
 SAGA_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS privacy_sagas (
@@ -38,11 +45,15 @@ CREATE TABLE IF NOT EXISTS privacy_sagas (
     requested_by TEXT NOT NULL,
     actor TEXT NOT NULL,
     working_subject_id TEXT,
+    lease_holder TEXT,
     step_search_done INTEGER NOT NULL DEFAULT 0,
     step_cache_done INTEGER NOT NULL DEFAULT 0,
     step_blobs_done INTEGER NOT NULL DEFAULT 0,
     step_spool_done INTEGER NOT NULL DEFAULT 0,
+    step_sdtm_done INTEGER NOT NULL DEFAULT 0,
+    step_monitoring_done INTEGER NOT NULL DEFAULT 0,
     step_exports_done INTEGER NOT NULL DEFAULT 0,
+    step_audit_done INTEGER NOT NULL DEFAULT 0,
     step_edc_done INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     completed_at TEXT,
@@ -219,8 +230,8 @@ def start_withdrawal_saga(
             """
             INSERT INTO privacy_sagas (
                 request_id, site_id, trial_id, subject_digest, scope, anon_subject_ref,
-                effective_date, status, reason, requested_by, actor, working_subject_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                effective_date, status, reason, requested_by, actor, working_subject_id, lease_holder, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, NULL, ?)
             """,
             (request_id, site_id, trial_id, subj_digest, scope, anon_ref, eff_date, reason, requested_by, actor, subject_id, now),
         )
@@ -286,23 +297,33 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
             stats["completed"] += 1
             continue
 
+        lease_id = f"sagalck-{uuid.uuid4().hex[:12]}"
+        with connect_edc(paths.edc_db) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            fresh = conn.execute("SELECT * FROM privacy_sagas WHERE request_id = ?", (request_id,)).fetchone()
+            if fresh is None or fresh["status"] == "completed" or fresh["lease_holder"] is not None:
+                conn.rollback()
+                continue
+            conn.execute(
+                "UPDATE privacy_sagas SET status = 'in_progress', lease_holder = ?, error = NULL WHERE request_id = ? AND status != 'completed'",
+                (lease_id, request_id),
+            )
+            conn.commit()
+            saga = dict(conn.execute("SELECT * FROM privacy_sagas WHERE request_id = ?", (request_id,)).fetchone())
+
         try:
             with connect_edc(paths.edc_db) as conn:
-                conn.execute(
-                    "UPDATE privacy_sagas SET status = 'in_progress', error = NULL WHERE request_id = ? AND status != 'completed'",
-                    (request_id,),
-                )
-                conn.commit()
-                subj_row = conn.execute("SELECT * FROM subjects WHERE subject_id = ?", (orig_subject_id,)).fetchone()
+                subj_row = conn.execute("SELECT * FROM subjects WHERE subject_id IN (?, ?)", (orig_subject_id, anon_ref)).fetchone()
                 if subj_row is None:
                     continue
                 subj = dict(subj_row)
-                visits = [dict(r) for r in conn.execute("SELECT * FROM visits WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-                aes = [dict(r) for r in conn.execute("SELECT * FROM adverse_events WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-                labs = [dict(r) for r in conn.execute("SELECT * FROM lab_results WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-                notifs = [dict(r) for r in conn.execute("SELECT * FROM epro_notifications WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-                queries = [dict(r) for r in conn.execute("SELECT * FROM data_queries WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-                codings = [dict(r) for r in conn.execute("SELECT * FROM medical_coding_queue WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
+                cur_sid = subj["subject_id"]
+                visits = [dict(r) for r in conn.execute("SELECT * FROM visits WHERE subject_id = ?", (cur_sid,)).fetchall()]
+                aes = [dict(r) for r in conn.execute("SELECT * FROM adverse_events WHERE subject_id = ?", (cur_sid,)).fetchall()]
+                labs = [dict(r) for r in conn.execute("SELECT * FROM lab_results WHERE subject_id = ?", (cur_sid,)).fetchall()]
+                notifs = [dict(r) for r in conn.execute("SELECT * FROM epro_notifications WHERE subject_id = ?", (cur_sid,)).fetchall()]
+                queries = [dict(r) for r in conn.execute("SELECT * FROM data_queries WHERE subject_id = ?", (cur_sid,)).fetchall()]
+                codings = [dict(r) for r in conn.execute("SELECT * FROM medical_coding_queue WHERE subject_id = ?", (cur_sid,)).fetchall()]
 
             orig_mrn = subj.get("mrn")
             dates = [
@@ -311,11 +332,15 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                 *(lb["collected_date"] for lb in labs if lb.get("collected_date")),
             ]
             sensitive = extract_sensitive_strings(subj, dates)
+            if orig_subject_id not in sensitive:
+                sensitive.append(orig_subject_id)
+                sensitive.sort(key=len, reverse=True)
             demo = safe_harbor_demographics(subj.get("age_at_enrollment"), subj.get("dob"))
             zip3 = safe_harbor_zip3(subj.get("postal_code"))
 
             if not saga["step_search_done"]:
                 SearchIndex(paths.search_db).delete_subject(orig_subject_id)
+                SearchIndex(paths.search_db).delete_subject(anon_ref)
                 with connect_edc(paths.edc_db) as conn:
                     conn.execute("UPDATE privacy_sagas SET step_search_done = 1 WHERE request_id = ?", (request_id,))
                     conn.commit()
@@ -384,13 +409,91 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                     conn.execute("UPDATE privacy_sagas SET step_spool_done = 1 WHERE request_id = ?", (request_id,))
                     conn.commit()
 
+            if not saga["step_sdtm_done"]:
+                init_sdtm_db(paths)
+                with connect_sdtm(paths.sdtm_db) as sdtm_conn:
+                    sdtm_conn.execute("BEGIN IMMEDIATE")
+                    sdtm_conn.execute("DELETE FROM sdtm_suppqual WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref))
+                    for sv in sdtm_conn.execute("SELECT sv_id, coval FROM sdtm_sv WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref)).fetchall():
+                        sdtm_conn.execute(
+                            "UPDATE sdtm_sv SET svstdtc = NULL, coval = ? WHERE sv_id = ?",
+                            (scrub_string(sv["coval"], sensitive), sv["sv_id"]),
+                        )
+                    for ae in sdtm_conn.execute("SELECT ae_seq_id, coval FROM sdtm_ae WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref)).fetchall():
+                        sdtm_conn.execute(
+                            "UPDATE sdtm_ae SET aestdtc = NULL, coval = ? WHERE ae_seq_id = ?",
+                            (scrub_string(ae["coval"], sensitive), ae["ae_seq_id"]),
+                        )
+                    sdtm_conn.execute("UPDATE sdtm_lb SET lbdtc = NULL WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref))
+                    sdtm_conn.execute(
+                        """
+                        UPDATE sdtm_dm
+                        SET usubjid = ?, subjid = ?, mrn = NULL, fullname = NULL, brthdtc = ?,
+                            age = ?, age_bucket = ?, postal_code = ?, rfstdtc = NULL, status = 'withdrawn'
+                        WHERE usubjid IN (?, ?)
+                        """,
+                        (anon_ref, anon_ref, demo["dob"], demo["age_at_enrollment"], demo["age_bucket"], zip3, orig_subject_id, anon_ref),
+                    )
+                    sdtm_conn.commit()
+                with connect_edc(paths.edc_db) as conn:
+                    conn.execute("UPDATE privacy_sagas SET step_sdtm_done = 1 WHERE request_id = ?", (request_id,))
+                    conn.commit()
+
+            if not saga["step_monitoring_done"]:
+                doc_path, _ = enrollment_log_paths(paths, site_id)
+                if doc_path.exists():
+                    doc = json.loads(doc_path.read_text(encoding="utf-8"))
+                    touched_log = False
+                    for entry in doc.get("entries", []):
+                        if entry.get("subject_id") in {orig_subject_id, anon_ref}:
+                            entry["subject_id"] = anon_ref
+                            entry["mrn"] = None
+                            entry["full_name"] = None
+                            entry["aliases"] = []
+                            entry["dob"] = demo["dob"]
+                            entry["age_at_enrollment"] = demo["age_at_enrollment"]
+                            entry["age_bucket"] = demo["age_bucket"]
+                            entry["postal_code"] = zip3
+                            entry["randomization_date"] = None
+                            entry["status"] = "withdrawn"
+                            touched_log = True
+                    if touched_log:
+                        write_enrollment_log_signed(paths, site_id, doc)
+
+                sdv_items = read_sdv_items(paths, site_id)
+                if sdv_items:
+                    new_sdv: list[dict[str, Any]] = []
+                    sdv_mod = False
+                    for it in sdv_items:
+                        if it.get("subject_id") in {orig_subject_id, anon_ref} or (orig_mrn and it.get("mrn") == orig_mrn):
+                            cleaned: dict[str, Any] = {
+                                "item_type": it.get("item_type"),
+                                "ref_id": it.get("ref_id"),
+                                "anon_subject_ref": anon_ref,
+                            }
+                            if "study_day" in it:
+                                cleaned["study_day"] = it["study_day"]
+                            if "field_name" in it:
+                                cleaned["field_name"] = it["field_name"]
+                            if it.get("note"):
+                                cleaned["note"] = scrub_string(str(it["note"]), sensitive)
+                            if it.get("response"):
+                                cleaned["response"] = scrub_string(str(it["response"]), sensitive)
+                            new_sdv.append(cleaned)
+                            sdv_mod = True
+                        else:
+                            new_sdv.append(it)
+                    if sdv_mod:
+                        replace_sdv_items(paths, site_id, new_sdv)
+
+                with connect_edc(paths.edc_db) as conn:
+                    conn.execute("UPDATE privacy_sagas SET step_monitoring_done = 1 WHERE request_id = ?", (request_id,))
+                    conn.commit()
+
             done_at = utc_now_iso()
-            with connect_edc(paths.edc_db) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                if conn.execute("SELECT status FROM privacy_sagas WHERE request_id = ?", (request_id,)).fetchone()["status"] == "completed":
-                    conn.rollback()
-                    continue
-                if not saga["step_exports_done"]:
+            if not saga["step_exports_done"]:
+                with connect_edc(paths.edc_db) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
                     manifests = conn.execute("SELECT snapshot_id, file_path FROM export_manifests WHERE trial_id = ?", (trial_id,)).fetchall()
                     for m in manifests:
                         snap_path = paths.exports_dir / m["file_path"]
@@ -422,6 +525,32 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                             new_sha = write_snapshot_atomic(snap_path, doc)
                             conn.execute("UPDATE export_manifests SET sha256_checksum = ?, updated_at = ? WHERE snapshot_id = ?", (new_sha, done_at, m["snapshot_id"]))
                     conn.execute("UPDATE privacy_sagas SET step_exports_done = 1 WHERE request_id = ?", (request_id,))
+                    conn.commit()
+
+            if not saga["step_audit_done"]:
+                init_audit_db(paths)
+                with connect_audit(paths.audit_db) as audit_conn:
+                    audit_conn.execute("BEGIN IMMEDIATE")
+                    audit_conn.execute("DELETE FROM audit_pii_details WHERE subject_id IN (?, ?)", (orig_subject_id, anon_ref))
+                    if audit_conn.execute(
+                        "SELECT 1 FROM audit_log WHERE action = 'CONSENT_WITHDRAWN' AND resource_ref = ?",
+                        (anon_ref,),
+                    ).fetchone() is None:
+                        append_audit_event(
+                            audit_conn, site_id=site_id, actor=saga["actor"], action="CONSENT_WITHDRAWN",
+                            resource_type="subject", resource_ref=anon_ref,
+                            structural_payload={"request_id": request_id, "trial_id": trial_id, "anon_subject_ref": anon_ref, "engine": "saga"},
+                        )
+                    audit_conn.commit()
+                with connect_edc(paths.edc_db) as conn:
+                    conn.execute("UPDATE privacy_sagas SET step_audit_done = 1 WHERE request_id = ?", (request_id,))
+                    conn.commit()
+
+            with connect_edc(paths.edc_db) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if conn.execute("SELECT status FROM privacy_sagas WHERE request_id = ?", (request_id,)).fetchone()["status"] == "completed":
+                    conn.rollback()
+                    continue
 
                 for v in visits:
                     conn.execute(
@@ -466,32 +595,27 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
                     "UPDATE scheduled_jobs SET subject_id = ?, payload_json = ?, status = CASE WHEN status = 'scheduled' THEN 'cancelled' ELSE status END WHERE subject_id = ?",
                     (anon_ref, json.dumps({"cancelled": True, "anon_subject_ref": anon_ref}), orig_subject_id),
                 )
-                conn.execute("DELETE FROM audit_pii_details WHERE subject_id = ?", (orig_subject_id,))
                 conn.execute(
                     "UPDATE outbox_events SET aggregate_id = ?, payload_json = ? WHERE aggregate_id = ?",
                     (anon_ref, json.dumps({"redacted": True, "anon_subject_ref": anon_ref}), orig_subject_id),
                 )
+                if cur_sid == orig_subject_id:
+                    conn.execute(
+                        """
+                        UPDATE subjects
+                        SET subject_id = ?, mrn = NULL, full_name = NULL, email = NULL, phone = NULL,
+                            ssn = NULL, dob = ?, age_at_enrollment = ?, age_bucket = ?,
+                            street_address = NULL, city = NULL, postal_code = ?,
+                            device_serial = NULL, ip_address = NULL, portal_url = NULL,
+                            emergency_contact_name = NULL, emergency_contact_phone = NULL,
+                            randomization_date = NULL, status = 'withdrawn', anon_subject_ref = ?,
+                            household_group_id = NULL, aliases_json = '[]', updated_at = ?
+                        WHERE subject_id = ?
+                        """,
+                        (anon_ref, demo["dob"], demo["age_at_enrollment"], demo["age_bucket"], zip3, anon_ref, done_at, orig_subject_id),
+                    )
                 conn.execute(
-                    """
-                    UPDATE subjects
-                    SET subject_id = ?, mrn = NULL, full_name = NULL, email = NULL, phone = NULL,
-                        ssn = NULL, dob = ?, age_at_enrollment = ?, age_bucket = ?,
-                        street_address = NULL, city = NULL, postal_code = ?,
-                        device_serial = NULL, ip_address = NULL, portal_url = NULL,
-                        emergency_contact_name = NULL, emergency_contact_phone = NULL,
-                        randomization_date = NULL, status = 'withdrawn', anon_subject_ref = ?,
-                        household_group_id = NULL, aliases_json = '[]', updated_at = ?
-                    WHERE subject_id = ?
-                    """,
-                    (anon_ref, demo["dob"], demo["age_at_enrollment"], demo["age_bucket"], zip3, anon_ref, done_at, orig_subject_id),
-                )
-                append_audit_event(
-                    conn, site_id=site_id, actor=saga["actor"], action="CONSENT_WITHDRAWN",
-                    resource_type="subject", resource_ref=anon_ref,
-                    structural_payload={"request_id": request_id, "trial_id": trial_id, "anon_subject_ref": anon_ref, "engine": "saga"},
-                )
-                conn.execute(
-                    "UPDATE privacy_sagas SET step_edc_done = 1, working_subject_id = NULL, status = 'completed', completed_at = ?, error = NULL WHERE request_id = ?",
+                    "UPDATE privacy_sagas SET step_edc_done = 1, working_subject_id = NULL, lease_holder = NULL, status = 'completed', completed_at = ?, error = NULL WHERE request_id = ?",
                     (done_at, request_id),
                 )
                 conn.commit()
@@ -499,7 +623,7 @@ def advance_pending_sagas(paths: DataPaths) -> dict[str, int]:
         except Exception as exc:
             with connect_edc(paths.edc_db) as conn:
                 conn.execute(
-                    "UPDATE privacy_sagas SET status = 'in_progress', completed_at = NULL, error = ? WHERE request_id = ? AND status != 'completed'",
+                    "UPDATE privacy_sagas SET status = 'in_progress', lease_holder = NULL, completed_at = NULL, error = ? WHERE request_id = ? AND status != 'completed'",
                     (f"{type(exc).__name__}: {exc}", request_id),
                 )
                 conn.commit()
@@ -513,6 +637,7 @@ def _advance_follow_up_saga(paths: DataPaths, saga: dict[str, Any]) -> None:
 
     request_id = saga["request_id"]
     subject_id = saga["working_subject_id"]
+    site_id = saga["site_id"]
     with connect_edc(paths.edc_db) as conn:
         row = conn.execute("SELECT mrn FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
     mrn = row["mrn"] if row else None
@@ -522,6 +647,39 @@ def _advance_follow_up_saga(paths: DataPaths, saga: dict[str, Any]) -> None:
     spool.replace_outbound(keep)
     keep_dlq = [r for r in spool.read_dead_letters() if r.get("subject_id") != subject_id and not (mrn and r.get("mrn") == mrn)]
     spool.replace_dead_letters(keep_dlq)
+
+    init_sdtm_db(paths)
+    with connect_sdtm(paths.sdtm_db) as sdtm_conn:
+        sdtm_conn.execute(
+            "UPDATE sdtm_dm SET status = 'follow_up_withdrawn' WHERE usubjid = ? AND status = 'active'",
+            (subject_id,),
+        )
+        sdtm_conn.commit()
+
+    doc_path, _ = enrollment_log_paths(paths, site_id)
+    if doc_path.exists():
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+        changed = False
+        for entry in doc.get("entries", []):
+            if entry.get("subject_id") == subject_id and entry.get("status") == "active":
+                entry["status"] = "follow_up_withdrawn"
+                changed = True
+        if changed:
+            write_enrollment_log_signed(paths, site_id, doc)
+
+    init_audit_db(paths)
+    with connect_audit(paths.audit_db) as audit_conn:
+        audit_conn.execute("BEGIN IMMEDIATE")
+        if audit_conn.execute(
+            "SELECT 1 FROM audit_log WHERE action = 'FOLLOW_UP_WITHDRAWN' AND resource_ref = ?",
+            (request_id,),
+        ).fetchone() is None:
+            append_audit_event(
+                audit_conn, site_id=site_id, actor=saga["actor"], action="FOLLOW_UP_WITHDRAWN",
+                resource_type="withdrawal_request", resource_ref=request_id,
+                structural_payload={"request_id": request_id, "engine": "saga", "scope": "follow_up_only"},
+            )
+        audit_conn.commit()
 
     done_at = utc_now_iso()
     with connect_edc(paths.edc_db) as conn:
@@ -542,13 +700,8 @@ def _advance_follow_up_saga(paths: DataPaths, saga: dict[str, Any]) -> None:
             "UPDATE subjects SET status = 'follow_up_withdrawn', updated_at = ? WHERE subject_id = ? AND status = 'active'",
             (done_at, subject_id),
         )
-        append_audit_event(
-            conn, site_id=saga["site_id"], actor=saga["actor"], action="FOLLOW_UP_WITHDRAWN",
-            resource_type="withdrawal_request", resource_ref=request_id,
-            structural_payload={"request_id": request_id, "engine": "saga", "scope": "follow_up_only"},
-        )
         conn.execute(
-            "UPDATE privacy_sagas SET status = 'completed', completed_at = ?, working_subject_id = NULL, error = NULL WHERE request_id = ?",
+            "UPDATE privacy_sagas SET status = 'completed', completed_at = ?, working_subject_id = NULL, lease_holder = NULL, error = NULL WHERE request_id = ?",
             (done_at, request_id),
         )
         conn.commit()

@@ -121,5 +121,29 @@
     "must_fail_checks": [
       "follow_up_only_stops_contact_keeps_data"
     ]
+  },
+  {
+    "id": "m16_sdtm_warehouse_untouched",
+    "patch": "m16_sdtm_warehouse_untouched.patch",
+    "description": "De-identifies operational EDC tables but overlooks the CDISC SDTM study tabulation warehouse (cdisc_sdtm.db)",
+    "must_fail_checks": [
+      "sdtm_warehouse_deidentified_and_retained"
+    ]
+  },
+  {
+    "id": "m17_site_monitoring_untouched",
+    "patch": "m17_site_monitoring_untouched.patch",
+    "description": "Skips the ICH E6 site screening/enrollment log and CRA SDV worklist files under monitoring/",
+    "must_fail_checks": [
+      "site_monitoring_logs_and_sdv_scoped"
+    ]
+  },
+  {
+    "id": "m18_early_edc_commit_breaks_audit_fault_retry",
+    "patch": "m18_early_edc_commit_breaks_audit_fault_retry.patch",
+    "description": "Commits subjects re-keying in edc.db before part11_audit.db, so a transient audit-ledger outage strands retry lookup",
+    "must_fail_checks": [
+      "late_stage_audit_fault_recovery"
+    ]
   }
 ]

@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -1200,7 +1200,7 @@
+                     metadata=sub_meta,
+                     transmitted_at=now_iso,
+                 )
+-                if not gw_res["accepted"]:
++                if False and not gw_res["accepted"]:
+                     pv_conn.execute(
+                         """
+                         UPDATE pv_ind_submissions

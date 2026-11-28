@@ -1,4 +1,4 @@
-"""Criterion 2: Active-Store HIPAA Safe Harbor De-Identification (24.0% total weight, 8 checks)."""
+"""Criterion 2: Active-Store HIPAA Safe Harbor De-Identification (24.0% total weight, 9 checks)."""
 
 from rewardkit import criteria
 
@@ -21,4 +21,9 @@ criteria.trialvault_check("projection_cache_clean", name="projection_cache_clean
 criteria.trialvault_check("blobs_and_metadata_clean", name="blobs_and_metadata_clean", weight=4.0)
 criteria.trialvault_check(
     "aliases_and_initials_redacted", name="aliases_and_initials_redacted", weight=3.0
+)
+criteria.trialvault_check(
+    "sdtm_warehouse_deidentified_and_retained",
+    name="sdtm_warehouse_deidentified_and_retained",
+    weight=4.0,
 )

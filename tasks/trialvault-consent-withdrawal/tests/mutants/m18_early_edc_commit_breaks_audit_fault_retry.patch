@@ -1,0 +1,26 @@
+--- a/trialvault/withdrawal.py
++++ b/trialvault/withdrawal.py
+@@ -600,7 +600,7 @@
+         conn.commit()
+ 
+         subj_row = conn.execute(
+-            "SELECT * FROM subjects WHERE subject_id IN (?, ?)", (orig_subject_id, anon_ref)
++            "SELECT * FROM subjects WHERE subject_id = ?", (orig_subject_id,)
+         ).fetchone()
+         if subj_row is None:
+             return True
+@@ -631,6 +631,14 @@
+     now = utc_now_iso()
+ 
+     try:
++        with connect_edc(paths.edc_db) as early_conn:
++            early_conn.execute(
++                "UPDATE subjects SET subject_id = ?, full_name = NULL, mrn = NULL, aliases_json = '[]' WHERE subject_id = ?",
++                (anon_ref, orig_subject_id),
++            )
++            early_conn.commit()
++        cur_sid = anon_ref
++
+         # 1. SQLite FTS5 Search Index
+         SearchIndex(paths.search_db).delete_subject(orig_subject_id)
+         SearchIndex(paths.search_db).delete_subject(anon_ref)

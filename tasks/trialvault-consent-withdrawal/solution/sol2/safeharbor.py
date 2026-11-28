@@ -20,7 +20,7 @@ STRIP_KEYS = frozenset(
         "email", "recipient", "phone", "ssn", "dob", "street_address", "city",
         "postal_code", "device_serial", "ip_address", "signature_ip", "portal_url",
         "emergency_contact_name", "emergency_contact_phone",
-        "collected_date", "visit_date", "onset_date", "randomization_date",
+        "collected_date", "visit_date", "onset_date", "randomization_date", "recorded_date",
     }
 )
 

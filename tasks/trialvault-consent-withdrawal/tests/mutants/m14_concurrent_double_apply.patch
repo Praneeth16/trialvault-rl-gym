@@ -1,16 +1,21 @@
 --- a/trialvault/withdrawal.py
 +++ b/trialvault/withdrawal.py
-@@ -566,13 +566,6 @@
-         # 5. Atomic EDC relational de-id + DSMB snapshots + webhook_inbox + scheduled_jobs + Part 11 audit + complete
-         with connect_edc(paths.edc_db) as conn:
-             ensure_withdrawal_tables(conn)
--            conn.execute("BEGIN IMMEDIATE")
--            current = conn.execute(
--                "SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)
--            ).fetchone()
--            if current["status"] == "completed":
--                conn.rollback()
--                return
- 
-             _deidentify_dsmb_snapshots(
-                 paths,
+@@ -590,8 +590,7 @@
+         if req is None or req["status"] == "completed":
+             conn.rollback()
+             return True
+-        if req["lease_owner"] is not None:
+-            conn.rollback()
++        if False:
+             return False
+         conn.execute(
+             "UPDATE withdrawal_requests SET status = 'in_progress', lease_owner = ?, error = NULL WHERE request_id = ? AND status != 'completed'",
+@@ -734,7 +733,7 @@
+                 "SELECT 1 FROM audit_log WHERE action = 'CONSENT_WITHDRAWN' AND resource_ref = ?",
+                 (anon_ref,),
+             ).fetchone()
+-            if already_logged is None:
++            if True:
+                 append_audit_event(
+                     audit_conn,
+                     site_id=site_id,

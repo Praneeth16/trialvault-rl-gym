@@ -5,9 +5,10 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from trialvault.audit import append_audit_event
+from trialvault.audit import record_audit_entry
 from trialvault.config import DataPaths
 from trialvault.db import connect_edc, utc_now_iso
+from trialvault.monitoring.sdv_feed import append_sdv_item
 from trialvault.service import enqueue_outbox, opaque_audit_ref
 
 
@@ -45,17 +46,6 @@ def open_data_query(
                 now,
             ),
         )
-        append_audit_event(
-            conn,
-            site_id=site_id,
-            actor=actor,
-            action="DATA_QUERY_OPENED",
-            resource_type="data_query",
-            resource_ref=opaque_audit_ref("qry", query_id),
-            structural_payload={"field_name": data["field_name"], "status": data.get("status", "open")},
-            pii_subject_id=subject_id,
-            pii_detail={"subject_id": subject_id, "query_text": data["query_text"]},
-        )
         enqueue_outbox(
             conn,
             event_type="query.opened",
@@ -69,7 +59,36 @@ def open_data_query(
             },
         )
         conn.commit()
-        return dict(conn.execute("SELECT * FROM data_queries WHERE query_id = ?", (query_id,)).fetchone())
+        row = dict(conn.execute("SELECT * FROM data_queries WHERE query_id = ?", (query_id,)).fetchone())
+        subj_dict = dict(subj)
+
+    record_audit_entry(
+        paths,
+        site_id=site_id,
+        actor=actor,
+        action="DATA_QUERY_OPENED",
+        resource_type="data_query",
+        resource_ref=opaque_audit_ref("qry", query_id),
+        structural_payload={"field_name": data["field_name"], "status": data.get("status", "open")},
+        pii_subject_id=subject_id,
+        pii_detail={"subject_id": subject_id, "query_text": data["query_text"]},
+    )
+    append_sdv_item(
+        paths,
+        site_id,
+        {
+            "item_type": "data_query",
+            "ref_id": query_id,
+            "subject_id": subject_id,
+            "mrn": subj_dict.get("mrn"),
+            "patient_name": subj_dict.get("full_name"),
+            "field_name": data["field_name"],
+            "note": data["query_text"],
+            "response": data.get("response_text"),
+            "recorded_date": now[:10],
+        },
+    )
+    return row
 
 
 def list_subject_queries(paths: DataPaths, *, site_id: str, subject_id: str) -> list[dict[str, Any]]:

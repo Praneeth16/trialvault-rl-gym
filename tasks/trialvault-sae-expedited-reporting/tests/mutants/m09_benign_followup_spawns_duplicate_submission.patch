@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -1094,7 +1094,7 @@
+                     r_ser = normalize_seriousness(json.loads(r["seriousness_json"]))
+                     grade_escalated = int(r["ctcae_grade"]) > prev_grade
+                     added_flag = any(r_ser[f] and not prev_ser[f] for f in SERIOUSNESS_FLAGS)
+-                    if grade_escalated or added_flag:
++                    if True or grade_escalated or added_flag:
+                         trig_report = r
+                         break
+ 

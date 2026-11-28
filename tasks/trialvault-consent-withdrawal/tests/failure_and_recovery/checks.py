@@ -1,4 +1,4 @@
-"""Criterion 6: Transient Failure & Crash Recovery (7.0% total weight, 2 checks)."""
+"""Criterion 6: Transient Fault & Cross-Store Crash Recovery (9.0% total weight, 3 checks)."""
 
 from rewardkit import criteria
 
@@ -10,5 +10,10 @@ criteria.trialvault_check(
 criteria.trialvault_check(
     "retry_after_fault_converges_cleanly",
     name="retry_after_fault_converges_cleanly",
+    weight=4.0,
+)
+criteria.trialvault_check(
+    "late_stage_audit_fault_recovery",
+    name="late_stage_audit_fault_recovery",
     weight=4.0,
 )

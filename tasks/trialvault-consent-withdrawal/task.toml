@@ -3,7 +3,7 @@ artifacts = ["/app"]
 
 [task]
 name = "praneeth16/trialvault-consent-withdrawal"
-description = "Implement HIPAA Safe Harbor consent withdrawal across a 5-store clinical trial EDC without breaking FDA 21 CFR Part 11 audit chains or safety endpoints."
+description = "Implement HIPAA Safe Harbor consent withdrawal across multi-database clinical EDC, CDISC SDTM warehouse, and signed site monitoring stores without breaking FDA 21 CFR Part 11 audit chains or safety endpoints."
 authors = [{ name = "Praneeth Paikray", email = "paiky1995@gmail.com" }]
 keywords = [
     "hls",
@@ -18,7 +18,7 @@ keywords = [
 [metadata]
 category = "healthcare-life-sciences"
 difficulty = "hard"
-difficulty_explanation = "Combines 6 interacting brownfield patterns: 5-store HIPAA Safe Harbor de-identification (incl. restricted ZIP3 and >89 age bucketing), FDA 21 CFR Part 11 audit-chain and safety-summary preservation, async worker convergence, late HL7 webhook and outbox replay suppression, transient fault recovery, and multi-site tenant/idempotency/regulatory-hold guards."
+difficulty_explanation = "Combines 7 interacting brownfield patterns across separate SQLite databases and file stores (edc.db, part11_audit.db, cdisc_sdtm.db, search.db, cache, blobs/manifests, DSMB exports, site enrollment/SDV logs, ePRO spools): Safe Harbor de-identification (restricted ZIP3, >89 age bucketing, aliases/initials), 21 CFR Part 11 separate-ledger hash chain, ICH E6 follow_up_only vs full scope escalation, FDA pre/post specimen boundary, cross-DB concurrent workers, and late-stage audit-ledger fault recovery."
 
 [metadata.harbor.lint]
 extend-select = ["root-agent"]

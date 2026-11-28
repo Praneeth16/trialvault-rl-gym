@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -721,7 +721,7 @@
+             edc_conn.rollback()
+             return
+         merged = _merge_reports(all_reports)
+-        site_status = "received" if merged["has_unprocessed"] else "assessed"
++        site_status = "received" if merged["has_unprocessed"] else "susar_submitted"
+         edc_conn.execute(
+             """
+             UPDATE safety_cases

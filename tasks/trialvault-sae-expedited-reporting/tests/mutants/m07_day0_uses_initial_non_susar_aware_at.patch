@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -1008,7 +1008,7 @@
+                     thresh_merged = prefix_merged
+                     break
+ 
+-            day0_dt = parse_utc_iso(str(chrono[thresh_idx]["aware_at"]))
++            day0_dt = parse_utc_iso(str(chrono[0]["aware_at"]))
+             day0_at = format_utc_iso(day0_dt)
+             thresh_ser = thresh_merged["seriousness"]
+             if thresh_ser["death"] or thresh_ser["life_threatening"]:

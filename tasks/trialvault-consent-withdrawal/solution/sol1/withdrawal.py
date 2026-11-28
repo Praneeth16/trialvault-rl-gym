@@ -1,4 +1,4 @@
-"""SOLUTION=1 (v2): HIPAA Safe Harbor de-identification and outbox-driven withdrawal engine."""
+"""SOLUTION=1 (v4): HIPAA Safe Harbor de-identification and outbox-driven withdrawal engine across multi-DB stores."""
 
 from __future__ import annotations
 
@@ -9,14 +9,21 @@ import sqlite3
 import uuid
 from typing import Any
 
-from trialvault.audit import append_audit_event
+from trialvault.audit import append_audit_event, connect_audit, init_audit_db
 from trialvault.blobs import BlobStore
 from trialvault.cache import ProjectionCache
 from trialvault.config import DataPaths
 from trialvault.db import connect_edc, utc_now_iso
 from trialvault.exports import write_snapshot_atomic
+from trialvault.monitoring.sdv_feed import (
+    enrollment_log_paths,
+    read_sdv_items,
+    replace_sdv_items,
+    write_enrollment_log_signed,
+)
 from trialvault.search import SearchIndex
 from trialvault.spool import SpoolStore
+from trialvault.warehouse.sdtm import connect_sdtm, init_sdtm_db
 
 RESTRICTED_ZIP3 = frozenset(
     {
@@ -31,7 +38,7 @@ PHI_JSON_KEYS = frozenset(
         "email", "recipient", "phone", "ssn", "dob", "street_address", "city",
         "postal_code", "device_serial", "ip_address", "signature_ip", "portal_url",
         "emergency_contact_name", "emergency_contact_phone",
-        "collected_date", "visit_date", "onset_date", "randomization_date",
+        "collected_date", "visit_date", "onset_date", "randomization_date", "recorded_date",
     }
 )
 
@@ -47,6 +54,7 @@ CREATE TABLE IF NOT EXISTS withdrawal_requests (
     status TEXT NOT NULL,
     reason TEXT NOT NULL,
     requested_by TEXT NOT NULL,
+    lease_owner TEXT,
     created_at TEXT NOT NULL,
     completed_at TEXT,
     error TEXT,
@@ -305,8 +313,8 @@ def create_withdrawal_request(
             """
             INSERT INTO withdrawal_requests (
                 request_id, site_id, trial_id, subject_id_hash, scope, anon_subject_ref,
-                effective_date, status, reason, requested_by, created_at, completed_at, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL)
+                effective_date, status, reason, requested_by, lease_owner, created_at, completed_at, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL, ?, NULL, NULL)
             """,
             (request_id, site_id, trial_id, subj_hash, scope, anon_ref, eff_date, reason, requested_by, now),
         )
@@ -462,41 +470,149 @@ def _deidentify_dsmb_snapshots(
             )
 
 
-def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> None:
-    """Converge all active stores, exports, archives, and queues idempotently."""
+def _deidentify_sdtm_warehouse(
+    paths: DataPaths,
+    *,
+    orig_subject_id: str,
+    anon_ref: str,
+    new_zip: str | None,
+    new_age: int | None,
+    new_age_bucket: str | None,
+    new_dob: str | None,
+    tokens: list[str],
+) -> None:
+    init_sdtm_db(paths)
+    with connect_sdtm(paths.sdtm_db) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM sdtm_suppqual WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref))
+        for sv in conn.execute("SELECT sv_id, coval FROM sdtm_sv WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref)).fetchall():
+            conn.execute(
+                "UPDATE sdtm_sv SET svstdtc = NULL, coval = ? WHERE sv_id = ?",
+                (redact_text(sv["coval"], tokens), sv["sv_id"]),
+            )
+        for ae in conn.execute("SELECT ae_seq_id, coval FROM sdtm_ae WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref)).fetchall():
+            conn.execute(
+                "UPDATE sdtm_ae SET aestdtc = NULL, coval = ? WHERE ae_seq_id = ?",
+                (redact_text(ae["coval"], tokens), ae["ae_seq_id"]),
+            )
+        conn.execute("UPDATE sdtm_lb SET lbdtc = NULL WHERE usubjid IN (?, ?)", (orig_subject_id, anon_ref))
+        conn.execute(
+            """
+            UPDATE sdtm_dm
+            SET usubjid = ?, subjid = ?, mrn = NULL, fullname = NULL, brthdtc = ?,
+                age = ?, age_bucket = ?, postal_code = ?, rfstdtc = NULL, status = 'withdrawn'
+            WHERE usubjid IN (?, ?)
+            """,
+            (anon_ref, anon_ref, new_dob, new_age, new_age_bucket, new_zip, orig_subject_id, anon_ref),
+        )
+        conn.commit()
+
+
+def _deidentify_site_monitoring(
+    paths: DataPaths,
+    *,
+    site_id: str,
+    orig_subject_id: str,
+    orig_mrn: str | None,
+    anon_ref: str,
+    new_zip: str | None,
+    new_age: int | None,
+    new_age_bucket: str | None,
+    new_dob: str | None,
+    tokens: list[str],
+) -> None:
+    doc_path, _ = enrollment_log_paths(paths, site_id)
+    if doc_path.exists():
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+        changed = False
+        for entry in doc.get("entries", []):
+            if entry.get("subject_id") in {orig_subject_id, anon_ref}:
+                entry["subject_id"] = anon_ref
+                entry["mrn"] = None
+                entry["full_name"] = None
+                entry["aliases"] = []
+                entry["dob"] = new_dob
+                entry["age_at_enrollment"] = new_age
+                entry["age_bucket"] = new_age_bucket
+                entry["postal_code"] = new_zip
+                entry["randomization_date"] = None
+                entry["status"] = "withdrawn"
+                changed = True
+        if changed:
+            write_enrollment_log_signed(paths, site_id, doc)
+
+    items = read_sdv_items(paths, site_id)
+    if items:
+        updated: list[dict[str, Any]] = []
+        sdv_changed = False
+        for item in items:
+            if item.get("subject_id") in {orig_subject_id, anon_ref} or (orig_mrn and item.get("mrn") == orig_mrn):
+                clean_item: dict[str, Any] = {
+                    "item_type": item.get("item_type"),
+                    "ref_id": item.get("ref_id"),
+                    "anon_subject_ref": anon_ref,
+                }
+                if "study_day" in item:
+                    clean_item["study_day"] = item["study_day"]
+                if "field_name" in item:
+                    clean_item["field_name"] = item["field_name"]
+                if item.get("note"):
+                    clean_item["note"] = redact_text(str(item["note"]), tokens)
+                if item.get("response"):
+                    clean_item["response"] = redact_text(str(item["response"]), tokens)
+                updated.append(clean_item)
+                sdv_changed = True
+            else:
+                updated.append(item)
+        if sdv_changed:
+            replace_sdv_items(paths, site_id, updated)
+
+
+def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> bool:
+    """Converge all active stores, warehouses, logs, exports, archives, and queues idempotently.
+
+    Returns True when the request is completed, or False if another concurrent worker holds the lease.
+    """
     request_id = job_payload["request_id"]
     orig_subject_id = job_payload["subject_id"]
     site_id = job_payload["site_id"]
     trial_id = job_payload["trial_id"]
     anon_ref = job_payload["anon_subject_ref"]
     actor = job_payload.get("actor", f"site:{site_id}")
+    worker_lease = f"wrk-{uuid.uuid4().hex[:12]}"
 
     with connect_edc(paths.edc_db) as conn:
         ensure_withdrawal_tables(conn)
+        conn.execute("BEGIN IMMEDIATE")
         req = conn.execute(
             "SELECT * FROM withdrawal_requests WHERE request_id = ?", (request_id,)
         ).fetchone()
         if req is None or req["status"] == "completed":
-            return
+            conn.rollback()
+            return True
+        if req["lease_owner"] is not None:
+            conn.rollback()
+            return False
         conn.execute(
-            "UPDATE withdrawal_requests SET status = 'in_progress', error = NULL WHERE request_id = ? AND status != 'completed'",
-            (request_id,),
+            "UPDATE withdrawal_requests SET status = 'in_progress', lease_owner = ?, error = NULL WHERE request_id = ? AND status != 'completed'",
+            (worker_lease, request_id),
         )
         conn.commit()
 
         subj_row = conn.execute(
-            "SELECT * FROM subjects WHERE subject_id = ?", (orig_subject_id,)
+            "SELECT * FROM subjects WHERE subject_id IN (?, ?)", (orig_subject_id, anon_ref)
         ).fetchone()
         if subj_row is None:
-            return
+            return True
         subj = dict(subj_row)
+        cur_sid = subj["subject_id"]
 
-        visits = [dict(r) for r in conn.execute("SELECT * FROM visits WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-        aes = [dict(r) for r in conn.execute("SELECT * FROM adverse_events WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-        labs = [dict(r) for r in conn.execute("SELECT * FROM lab_results WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-        notifs = [dict(r) for r in conn.execute("SELECT * FROM epro_notifications WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-        queries = [dict(r) for r in conn.execute("SELECT * FROM data_queries WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
-        codings = [dict(r) for r in conn.execute("SELECT * FROM medical_coding_queue WHERE subject_id = ?", (orig_subject_id,)).fetchall()]
+        visits = [dict(r) for r in conn.execute("SELECT * FROM visits WHERE subject_id = ?", (cur_sid,)).fetchall()]
+        aes = [dict(r) for r in conn.execute("SELECT * FROM adverse_events WHERE subject_id = ?", (cur_sid,)).fetchall()]
+        labs = [dict(r) for r in conn.execute("SELECT * FROM lab_results WHERE subject_id = ?", (cur_sid,)).fetchall()]
+        notifs = [dict(r) for r in conn.execute("SELECT * FROM epro_notifications WHERE subject_id = ?", (cur_sid,)).fetchall()]
+        queries = [dict(r) for r in conn.execute("SELECT * FROM data_queries WHERE subject_id = ?", (cur_sid,)).fetchall()]
+        codings = [dict(r) for r in conn.execute("SELECT * FROM medical_coding_queue WHERE subject_id = ?", (cur_sid,)).fetchall()]
 
     extra_dates = [
         *(v["visit_date"] for v in visits if v.get("visit_date")),
@@ -504,6 +620,9 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
         *(lb["collected_date"] for lb in labs if lb.get("collected_date")),
     ]
     tokens = collect_phi_tokens(subj, extra_dates=extra_dates)
+    if orig_subject_id not in tokens:
+        tokens.append(orig_subject_id)
+        tokens.sort(key=len, reverse=True)
     orig_mrn = subj.get("mrn")
     new_zip = generalize_zip(subj.get("postal_code"))
     new_age, new_age_bucket, new_dob = generalize_age_and_dob(
@@ -514,6 +633,7 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
     try:
         # 1. SQLite FTS5 Search Index
         SearchIndex(paths.search_db).delete_subject(orig_subject_id)
+        SearchIndex(paths.search_db).delete_subject(anon_ref)
 
         # 2. Projection Cache
         cache = ProjectionCache(paths.cache_file)
@@ -526,7 +646,7 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                 cache.delete(k)
         cache.delete(f"trial:{trial_id}:safety_summary")
 
-        # 3. Blob Store (delete eConsent, de-identify central-lab blobs + .meta.json)
+        # 3. Blob Store (delete eConsent, de-identify central-lab blobs + shipment manifests)
         blobs = BlobStore(paths.blobs_dir)
         blobs.delete(f"econsent/{site_id}/{orig_subject_id}_signed.json")
         for key in blobs.list_keys(f"econsent/{site_id}/"):
@@ -563,17 +683,33 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
         spool.replace_outbound([r for r in spool.read_outbound() if not belongs(r)])
         spool.replace_dead_letters([r for r in spool.read_dead_letters() if not belongs(r)])
 
-        # 5. Atomic EDC relational de-id + DSMB snapshots + webhook_inbox + scheduled_jobs + Part 11 audit + complete
-        with connect_edc(paths.edc_db) as conn:
-            ensure_withdrawal_tables(conn)
-            conn.execute("BEGIN IMMEDIATE")
-            current = conn.execute(
-                "SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)
-            ).fetchone()
-            if current["status"] == "completed":
-                conn.rollback()
-                return
+        # 5. CDISC SDTM Warehouse (`cdisc_sdtm.db`) & Site Monitoring Logs (`monitoring/`)
+        _deidentify_sdtm_warehouse(
+            paths,
+            orig_subject_id=orig_subject_id,
+            anon_ref=anon_ref,
+            new_zip=new_zip,
+            new_age=new_age,
+            new_age_bucket=new_age_bucket,
+            new_dob=new_dob,
+            tokens=tokens,
+        )
+        _deidentify_site_monitoring(
+            paths,
+            site_id=site_id,
+            orig_subject_id=orig_subject_id,
+            orig_mrn=orig_mrn,
+            anon_ref=anon_ref,
+            new_zip=new_zip,
+            new_age=new_age,
+            new_age_bucket=new_age_bucket,
+            new_dob=new_dob,
+            tokens=tokens,
+        )
 
+        # 6. DSMB Export Snapshots (before mutating subjects in edc.db so retry keeps full tokens)
+        with connect_edc(paths.edc_db) as conn:
+            conn.execute("BEGIN IMMEDIATE")
             _deidentify_dsmb_snapshots(
                 paths,
                 conn,
@@ -587,6 +723,44 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                 tokens=tokens,
                 now=now,
             )
+            conn.commit()
+
+        # 7. Separate 21 CFR Part 11 Audit Ledger (`part11_audit.db`): purge PII & idempotently append CONSENT_WITHDRAWN
+        init_audit_db(paths)
+        with connect_audit(paths.audit_db) as audit_conn:
+            audit_conn.execute("BEGIN IMMEDIATE")
+            audit_conn.execute("DELETE FROM audit_pii_details WHERE subject_id IN (?, ?)", (orig_subject_id, anon_ref))
+            already_logged = audit_conn.execute(
+                "SELECT 1 FROM audit_log WHERE action = 'CONSENT_WITHDRAWN' AND resource_ref = ?",
+                (anon_ref,),
+            ).fetchone()
+            if already_logged is None:
+                append_audit_event(
+                    audit_conn,
+                    site_id=site_id,
+                    actor=actor,
+                    action="CONSENT_WITHDRAWN",
+                    resource_type="subject",
+                    resource_ref=anon_ref,
+                    structural_payload={
+                        "request_id": request_id,
+                        "trial_id": trial_id,
+                        "anon_subject_ref": anon_ref,
+                        "safe_harbor_applied": True,
+                    },
+                )
+            audit_conn.commit()
+
+        # 8. Finalize relational EDC (`edc.db`) & mark withdrawal completed
+        with connect_edc(paths.edc_db) as conn:
+            ensure_withdrawal_tables(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)
+            ).fetchone()
+            if current["status"] == "completed":
+                conn.rollback()
+                return True
 
             for v in visits:
                 conn.execute(
@@ -653,7 +827,6 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                     ),
                 )
 
-            # Sanitize webhook_inbox (preserve accession_no deduplication, scrub PHI)
             conn.execute(
                 """
                 UPDATE webhook_inbox
@@ -662,8 +835,6 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                 """,
                 (anon_ref, json.dumps({"redacted": True, "anon_subject_ref": anon_ref}), orig_subject_id, orig_mrn, orig_mrn),
             )
-
-            # Cancel & scrub scheduled_jobs for this subject
             conn.execute(
                 """
                 UPDATE scheduled_jobs
@@ -672,11 +843,6 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                 """,
                 (anon_ref, json.dumps({"cancelled": True, "anon_subject_ref": anon_ref}), orig_subject_id),
             )
-
-            # Purge participant PII from audit_pii_details (never touch existing audit_log rows!)
-            conn.execute("DELETE FROM audit_pii_details WHERE subject_id = ?", (orig_subject_id,))
-
-            # Scrub historical outbox rows for this subject
             conn.execute(
                 "UPDATE outbox_events SET aggregate_id = ?, payload_json = ? WHERE aggregate_id = ?",
                 (anon_ref, json.dumps({"redacted": True, "anon_subject_ref": anon_ref}), orig_subject_id),
@@ -686,46 +852,33 @@ def execute_withdrawal_job(paths: DataPaths, job_payload: dict[str, Any]) -> Non
                 (json.dumps({"request_id": request_id, "anon_subject_ref": anon_ref}), request_id),
             )
 
-            # Re-key and de-identify subject row (ON UPDATE CASCADE re-keys child clinical tables)
-            conn.execute(
-                """
-                UPDATE subjects
-                SET subject_id = ?, mrn = NULL, full_name = NULL, email = NULL, phone = NULL,
-                    ssn = NULL, dob = ?, age_at_enrollment = ?, age_bucket = ?,
-                    street_address = NULL, city = NULL, postal_code = ?,
-                    device_serial = NULL, ip_address = NULL, portal_url = NULL,
-                    emergency_contact_name = NULL, emergency_contact_phone = NULL,
-                    randomization_date = NULL, status = 'withdrawn', anon_subject_ref = ?,
-                    household_group_id = NULL, aliases_json = '[]', updated_at = ?
-                WHERE subject_id = ?
-                """,
-                (anon_ref, new_dob, new_age, new_age_bucket, new_zip, anon_ref, now, orig_subject_id),
-            )
+            if cur_sid == orig_subject_id:
+                conn.execute(
+                    """
+                    UPDATE subjects
+                    SET subject_id = ?, mrn = NULL, full_name = NULL, email = NULL, phone = NULL,
+                        ssn = NULL, dob = ?, age_at_enrollment = ?, age_bucket = ?,
+                        street_address = NULL, city = NULL, postal_code = ?,
+                        device_serial = NULL, ip_address = NULL, portal_url = NULL,
+                        emergency_contact_name = NULL, emergency_contact_phone = NULL,
+                        randomization_date = NULL, status = 'withdrawn', anon_subject_ref = ?,
+                        household_group_id = NULL, aliases_json = '[]', updated_at = ?
+                    WHERE subject_id = ?
+                    """,
+                    (anon_ref, new_dob, new_age, new_age_bucket, new_zip, anon_ref, now, orig_subject_id),
+                )
 
-            append_audit_event(
-                conn,
-                site_id=site_id,
-                actor=actor,
-                action="CONSENT_WITHDRAWN",
-                resource_type="subject",
-                resource_ref=anon_ref,
-                structural_payload={
-                    "request_id": request_id,
-                    "trial_id": trial_id,
-                    "anon_subject_ref": anon_ref,
-                    "safe_harbor_applied": True,
-                },
-            )
             conn.execute(
-                "UPDATE withdrawal_requests SET status = 'completed', completed_at = ?, error = NULL WHERE request_id = ?",
+                "UPDATE withdrawal_requests SET status = 'completed', lease_owner = NULL, completed_at = ?, error = NULL WHERE request_id = ?",
                 (now, request_id),
             )
             conn.commit()
+            return True
     except Exception as exc:
         with connect_edc(paths.edc_db) as conn:
             ensure_withdrawal_tables(conn)
             conn.execute(
-                "UPDATE withdrawal_requests SET status = 'in_progress', completed_at = NULL, error = ? WHERE request_id = ? AND status != 'completed'",
+                "UPDATE withdrawal_requests SET status = 'in_progress', lease_owner = NULL, completed_at = NULL, error = ? WHERE request_id = ? AND status != 'completed'",
                 (f"{type(exc).__name__}: {exc}", request_id),
             )
             conn.commit()
@@ -762,7 +915,7 @@ def _deidentify_shipment_manifests(
             blobs.put_json(key, doc, meta)
 
 
-def execute_follow_up_job(paths: DataPaths, job_payload: dict[str, Any]) -> None:
+def execute_follow_up_job(paths: DataPaths, job_payload: dict[str, Any]) -> bool:
     """Stop all participant contact without de-identifying retained data."""
     from trialvault.service import sync_subject_projections
 
@@ -775,7 +928,7 @@ def execute_follow_up_job(paths: DataPaths, job_payload: dict[str, Any]) -> None
         req = conn.execute("SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)).fetchone()
         subj = conn.execute("SELECT mrn FROM subjects WHERE subject_id = ?", (subject_id,)).fetchone()
     if req is None or req["status"] == "completed":
-        return
+        return True
     mrn = subj["mrn"] if subj else None
 
     spool = SpoolStore(paths.outbound_queue, paths.dead_letters)
@@ -786,13 +939,50 @@ def execute_follow_up_job(paths: DataPaths, job_payload: dict[str, Any]) -> None
     spool.replace_outbound([r for r in spool.read_outbound() if not belongs(r)])
     spool.replace_dead_letters([r for r in spool.read_dead_letters() if not belongs(r)])
 
+    init_sdtm_db(paths)
+    with connect_sdtm(paths.sdtm_db) as sdtm_conn:
+        sdtm_conn.execute(
+            "UPDATE sdtm_dm SET status = 'follow_up_withdrawn' WHERE usubjid = ? AND status = 'active'",
+            (subject_id,),
+        )
+        sdtm_conn.commit()
+
+    doc_path, _ = enrollment_log_paths(paths, site_id)
+    if doc_path.exists():
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+        changed = False
+        for entry in doc.get("entries", []):
+            if entry.get("subject_id") == subject_id and entry.get("status") == "active":
+                entry["status"] = "follow_up_withdrawn"
+                changed = True
+        if changed:
+            write_enrollment_log_signed(paths, site_id, doc)
+
+    init_audit_db(paths)
+    with connect_audit(paths.audit_db) as audit_conn:
+        audit_conn.execute("BEGIN IMMEDIATE")
+        if audit_conn.execute(
+            "SELECT 1 FROM audit_log WHERE action = 'FOLLOW_UP_WITHDRAWN' AND resource_ref = ?",
+            (request_id,),
+        ).fetchone() is None:
+            append_audit_event(
+                audit_conn,
+                site_id=site_id,
+                actor=job_payload.get("actor", f"site:{site_id}"),
+                action="FOLLOW_UP_WITHDRAWN",
+                resource_type="withdrawal_request",
+                resource_ref=request_id,
+                structural_payload={"request_id": request_id, "scope": "follow_up_only"},
+            )
+        audit_conn.commit()
+
     now = utc_now_iso()
     with connect_edc(paths.edc_db) as conn:
         conn.execute("BEGIN IMMEDIATE")
         current = conn.execute("SELECT status FROM withdrawal_requests WHERE request_id = ?", (request_id,)).fetchone()
         if current["status"] == "completed":
             conn.rollback()
-            return
+            return True
         conn.execute(
             "UPDATE epro_notifications SET status = 'cancelled' WHERE subject_id = ? AND status = 'pending'",
             (subject_id,),
@@ -809,18 +999,10 @@ def execute_follow_up_job(paths: DataPaths, job_payload: dict[str, Any]) -> None
             "UPDATE subjects SET status = 'follow_up_withdrawn', updated_at = ? WHERE subject_id = ? AND status = 'active'",
             (now, subject_id),
         )
-        append_audit_event(
-            conn,
-            site_id=site_id,
-            actor=job_payload.get("actor", f"site:{site_id}"),
-            action="FOLLOW_UP_WITHDRAWN",
-            resource_type="withdrawal_request",
-            resource_ref=request_id,
-            structural_payload={"request_id": request_id, "scope": "follow_up_only"},
-        )
         conn.execute(
-            "UPDATE withdrawal_requests SET status = 'completed', completed_at = ?, error = NULL WHERE request_id = ?",
+            "UPDATE withdrawal_requests SET status = 'completed', lease_owner = NULL, completed_at = ?, error = NULL WHERE request_id = ?",
             (now, request_id),
         )
         conn.commit()
     sync_subject_projections(paths, subject_id)
+    return True

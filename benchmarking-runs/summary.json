@@ -1,20 +1,21 @@
 {
-  "task": "praneeth16/trialvault-consent-withdrawal",
+  "gym": "praneeth16/trialvault-rl-gym",
   "verifier_spec": {
     "framework": "harbor-rewardkit==0.2.4",
     "harbor_version": "0.26.0",
-    "criteria_count": 9,
-    "checks_count": 33,
+    "tasks_count": 2,
+    "total_criteria_count": 17,
+    "total_checks_count": 66,
     "max_single_check_weight_pct": 5.0,
     "fresh_seeded_runs_per_eval": 3,
     "aggregation": "min across 3 fresh-seeded runs per check, weighted-mean across criteria"
   },
   "boundary_and_mutant_proofs": {
     "starter_untouched": 0.0,
-    "oracle_solution_1_outbox": 1.0,
-    "oracle_solution_2_saga": 1.0,
-    "mutants_killed": "15/15",
-    "harbor_lint_root_agent": "pass (0 errors, 0 warnings)"
+    "oracle_solution_1": 1.0,
+    "oracle_solution_2": 1.0,
+    "mutants_killed": "30/30 (18 consent-withdrawal + 12 sae-expedited-reporting)",
+    "harbor_lint_root_agent": "pass on both tasks (0 errors, 0 warnings)"
   },
   "verifier_audit_fixes": [
     {
@@ -31,158 +32,206 @@
       "check": "isolation_and_survivors.shared_shipment_manifest_scoped",
       "issue_found_in_calibration": "Fixture accession numbers and shipment IDs embedded the same random tag as the participant's email and MRN, so a reasonable case-insensitive email-token redactor also clipped the withdrawn participant's accession number (1 of 3 fresh runs, zero PHI leaked).",
       "fix": "Accession numbers and shipment IDs now use an independent random token, so only genuine PHI handling is scored."
+    },
+    {
+      "check": "e2b_api_and_idempotency.auth_and_tenant_site_enforcement & idempotency_key_replay_and_conflict",
+      "issue_found_in_calibration": "Negative 403/404/409 E2B probes omitted the top-level 'seriousness' object even though docs only stated inner boolean keys could be omitted, causing Pydantic 422 before Codex's 403/404/409 handlers ran.",
+      "fix": "Documented top-level 'seriousness' default and supplied 'seriousness: {}' on auth/tenant/idempotency probes so those checks isolate auth and idempotency."
     }
   ],
-  "difficulty_takeaway": "On v3, frontier agents average 97.4% partial credit but only 1 of 6 runs fully pass (reward 1.0). The remaining failures are concentrated in two narrow obligations, replay suppression and initials redaction, that agents reproduce consistently across both runs, which points to genuine blind spots rather than noise. Partial credit stays high because the embedded 5-store stack fits in one context window; a multi-service variant (Postgres, OpenSearch, MinIO, Redpanda) is the honest route to lower partial scores.",
-  "calibration_runs": [
-    {
-      "file": "claude-haiku-4.5_run1.json",
-      "harness": "claude-code-cli",
-      "model": "claude-haiku-4.5",
-      "verifier_stage": "v3",
-      "run_index": 1,
-      "elapsed_sec": 753.76,
-      "exit_code": 0,
-      "reward": 0.9571,
-      "passed_checks": "32/33",
-      "full_pass": false,
-      "failures": [
-        "replay_and_late_webhooks.replayed_outbox_event_suppressed: Real bug: replayed outbox event re-delivers plaintext subject_id, MRN, name, and email after withdrawal"
+  "tasks": {
+    "trialvault-consent-withdrawal": {
+      "criteria_count": 9,
+      "checks_count": 36,
+      "mutants_killed": "18/18",
+      "full_pass_runs": "2/6",
+      "mean_reward": 0.9629,
+      "runs": [
+        {
+          "file": "consent-withdrawal-v4/claude-haiku-4.5_run1.json",
+          "harness": "claude",
+          "model": "haiku",
+          "stage": "v4_multi_db",
+          "run_index": 1,
+          "elapsed_sec": 1082.4,
+          "exit_code": 0,
+          "reward": 0.9607,
+          "passed_checks": "35/36",
+          "full_pass": false,
+          "failed_checks": [
+            "replay_and_late_webhooks.replayed_outbox_event_suppressed"
+          ]
+        },
+        {
+          "file": "consent-withdrawal-v4/claude-haiku-4.5_run2.json",
+          "harness": "claude",
+          "model": "haiku",
+          "stage": "v4_multi_db",
+          "run_index": 2,
+          "elapsed_sec": 909.81,
+          "exit_code": 0,
+          "reward": 0.9607,
+          "passed_checks": "35/36",
+          "full_pass": false,
+          "failed_checks": [
+            "replay_and_late_webhooks.replayed_outbox_event_suppressed"
+          ]
+        },
+        {
+          "file": "consent-withdrawal-v4/claude-sonnet-5_run1.json",
+          "harness": "claude",
+          "model": "sonnet",
+          "stage": "v4_multi_db",
+          "run_index": 1,
+          "elapsed_sec": 770.66,
+          "exit_code": 0,
+          "reward": 1.0,
+          "passed_checks": "36/36",
+          "full_pass": true,
+          "failed_checks": []
+        },
+        {
+          "file": "consent-withdrawal-v4/claude-sonnet-5_run2.json",
+          "harness": "claude",
+          "model": "sonnet",
+          "stage": "v4_multi_db",
+          "run_index": 2,
+          "elapsed_sec": 1106.18,
+          "exit_code": 0,
+          "reward": 1.0,
+          "passed_checks": "36/36",
+          "full_pass": true,
+          "failed_checks": []
+        },
+        {
+          "file": "consent-withdrawal-v4/codex-gpt-6.2-sol_run1.json",
+          "harness": "codex",
+          "model": "default",
+          "stage": "v4_multi_db",
+          "run_index": 1,
+          "elapsed_sec": 885.29,
+          "exit_code": 0,
+          "reward": 0.9279,
+          "passed_checks": "33/36",
+          "full_pass": false,
+          "failed_checks": [
+            "active_store_deid.aliases_and_initials_redacted",
+            "active_store_deid.sdtm_warehouse_deidentified_and_retained",
+            "isolation_and_survivors.site_monitoring_logs_and_sdv_scoped"
+          ]
+        },
+        {
+          "file": "consent-withdrawal-v4/codex-gpt-6.2-sol_run2.json",
+          "harness": "codex",
+          "model": "default",
+          "stage": "v4_multi_db",
+          "run_index": 2,
+          "elapsed_sec": 1018.16,
+          "exit_code": 0,
+          "reward": 0.9279,
+          "passed_checks": "33/36",
+          "full_pass": false,
+          "failed_checks": [
+            "active_store_deid.aliases_and_initials_redacted",
+            "active_store_deid.sdtm_warehouse_deidentified_and_retained",
+            "isolation_and_survivors.site_monitoring_logs_and_sdv_scoped"
+          ]
+        }
       ]
     },
-    {
-      "file": "claude-haiku-4.5_run2.json",
-      "harness": "claude-code-cli",
-      "model": "claude-haiku-4.5",
-      "verifier_stage": "v3",
-      "run_index": 2,
-      "elapsed_sec": 753.61,
-      "exit_code": 0,
-      "reward": 0.9571,
-      "passed_checks": "32/33",
-      "full_pass": false,
-      "failures": [
-        "replay_and_late_webhooks.replayed_outbox_event_suppressed: Real bug: replayed outbox event re-delivers plaintext subject_id, MRN, name, and email after withdrawal"
-      ]
-    },
-    {
-      "file": "claude-sonnet-5_run1.json",
-      "harness": "claude-code-cli",
-      "model": "claude-sonnet-5",
-      "verifier_stage": "v3",
-      "run_index": 1,
-      "elapsed_sec": 1102.4,
-      "exit_code": 0,
-      "reward": 0.9769,
-      "passed_checks": "32/33",
-      "full_pass": false,
-      "failures": [
-        "isolation_and_survivors.shared_shipment_manifest_scoped: Verifier artifact (fixed): accession IDs shared the PHI tag, so a case-insensitive email-token redactor clipped 'ACC-PRI-R\u2026'; zero PHI leaked"
-      ]
-    },
-    {
-      "file": "claude-sonnet-5_run2.json",
-      "harness": "claude-code-cli",
-      "model": "claude-sonnet-5",
-      "verifier_stage": "v3",
-      "run_index": 2,
-      "elapsed_sec": 748.02,
-      "exit_code": 0,
-      "reward": 1.0,
-      "passed_checks": "33/33",
-      "full_pass": true,
-      "failures": []
-    },
-    {
-      "file": "codex-gpt-6.2-sol_run1.json",
-      "harness": "codex-cli",
-      "model": "gpt-6.2-sol (default)",
-      "verifier_stage": "v3",
-      "run_index": 1,
-      "elapsed_sec": 857.89,
-      "exit_code": 0,
-      "reward": 0.9752,
-      "passed_checks": "32/33",
-      "full_pass": false,
-      "failures": [
-        "active_store_deid.aliases_and_initials_redacted: Real bug: dotted initials 'N.K.' left in clinical notes although the policy doc names them"
-      ]
-    },
-    {
-      "file": "codex-gpt-6.2-sol_run2.json",
-      "harness": "codex-cli",
-      "model": "gpt-6.2-sol (default)",
-      "verifier_stage": "v3",
-      "run_index": 2,
-      "elapsed_sec": 1038.58,
-      "exit_code": 0,
-      "reward": 0.9752,
-      "passed_checks": "32/33",
-      "full_pass": false,
-      "failures": [
-        "active_store_deid.aliases_and_initials_redacted: Real bug: dotted initials 'N.K.' left in clinical notes although the policy doc names them"
+    "trialvault-sae-expedited-reporting": {
+      "criteria_count": 8,
+      "checks_count": 30,
+      "mutants_killed": "12/12",
+      "full_pass_runs": "4/6",
+      "mean_reward": 0.98,
+      "runs": [
+        {
+          "file": "sae-expedited-reporting/claude-haiku-4.5_run1.json",
+          "harness": "claude",
+          "model": "haiku",
+          "stage": "v1_4db_pv",
+          "run_index": 1,
+          "elapsed_sec": 500.14,
+          "exit_code": 0,
+          "reward": 1.0,
+          "passed_checks": "30/30",
+          "full_pass": true,
+          "failed_checks": []
+        },
+        {
+          "file": "sae-expedited-reporting/claude-haiku-4.5_run2.json",
+          "harness": "claude",
+          "model": "haiku",
+          "stage": "v1_4db_pv",
+          "run_index": 2,
+          "elapsed_sec": 429.66,
+          "exit_code": 0,
+          "reward": 1.0,
+          "passed_checks": "30/30",
+          "full_pass": true,
+          "failed_checks": []
+        },
+        {
+          "file": "sae-expedited-reporting/claude-sonnet-5_run1.json",
+          "harness": "claude",
+          "model": "sonnet",
+          "stage": "v1_4db_pv",
+          "run_index": 1,
+          "elapsed_sec": 430.26,
+          "exit_code": 0,
+          "reward": 1.0,
+          "passed_checks": "30/30",
+          "full_pass": true,
+          "failed_checks": []
+        },
+        {
+          "file": "sae-expedited-reporting/claude-sonnet-5_run2.json",
+          "harness": "claude",
+          "model": "sonnet",
+          "stage": "v1_4db_pv",
+          "run_index": 2,
+          "elapsed_sec": 529.11,
+          "exit_code": 0,
+          "reward": 1.0,
+          "passed_checks": "30/30",
+          "full_pass": true,
+          "failed_checks": []
+        },
+        {
+          "file": "sae-expedited-reporting/codex-gpt-6.2-sol_run1.json",
+          "harness": "codex",
+          "model": "default",
+          "stage": "v1_4db_pv",
+          "run_index": 1,
+          "elapsed_sec": 700.56,
+          "exit_code": 0,
+          "reward": 0.94,
+          "passed_checks": "28/30",
+          "full_pass": false,
+          "failed_checks": [
+            "e2b_api_and_idempotency.auth_and_tenant_site_enforcement",
+            "e2b_api_and_idempotency.idempotency_key_replay_and_conflict"
+          ]
+        },
+        {
+          "file": "sae-expedited-reporting/codex-gpt-6.2-sol_run2.json",
+          "harness": "codex",
+          "model": "default",
+          "stage": "v1_4db_pv",
+          "run_index": 2,
+          "elapsed_sec": 857.88,
+          "exit_code": 0,
+          "reward": 0.94,
+          "passed_checks": "28/30",
+          "full_pass": false,
+          "failed_checks": [
+            "e2b_api_and_idempotency.auth_and_tenant_site_enforcement",
+            "e2b_api_and_idempotency.idempotency_key_replay_and_conflict"
+          ]
+        }
       ]
     }
-  ],
-  "calibration_runs_v2_history": [
-    {
-      "file": "v2/claude-haiku-4.5_run1.json",
-      "harness": "claude-code-cli",
-      "model": "claude-haiku-4.5",
-      "verifier_stage": "v2_pre_audit",
-      "elapsed_sec": 600.03,
-      "exit_code": 124,
-      "reward": 0.87,
-      "passed_checks": "25/28",
-      "real_failures": [
-        "replay_and_late_webhooks.replayed_outbox_event_suppressed (leaked plaintext PHI in outbox_events on replay)"
-      ]
-    },
-    {
-      "file": "v2/codex-gpt-6.2-sol_run1.json",
-      "harness": "codex-cli",
-      "model": "gpt-6.2-sol (high)",
-      "verifier_stage": "v2_pre_audit",
-      "elapsed_sec": 480.01,
-      "exit_code": 124,
-      "reward": 0.83,
-      "passed_checks": "24/28",
-      "real_failures": [
-        "failure_and_recovery.retry_after_fault_converges_cleanly",
-        "replay_and_late_webhooks.late_hl7_webhook_suppressed (FDA pre-withdrawal specimen boundary)"
-      ]
-    },
-    {
-      "file": "v2/codex-gpt-6.2-sol-full_run1.json",
-      "harness": "codex-cli",
-      "model": "gpt-6.2-sol (high)",
-      "verifier_stage": "v2_pre_audit",
-      "elapsed_sec": 720.03,
-      "exit_code": 124,
-      "reward": 0.96,
-      "passed_checks": "27/28",
-      "real_failures": [
-        "Only failed blobs_and_metadata_clean due to key-name coupling (fixed in verifier audit)"
-      ]
-    },
-    {
-      "file": "v2/claude-sonnet-5_run1.json",
-      "harness": "claude-code-cli",
-      "model": "claude-sonnet-5",
-      "verifier_stage": "v2_post_audit",
-      "elapsed_sec": 669.28,
-      "exit_code": 0,
-      "reward": 1.0,
-      "passed_checks": "28/28",
-      "real_failures": []
-    }
-  ],
-  "calibration_aggregate_v3": {
-    "runs": 6,
-    "agent_timeout_sec": 1800,
-    "mean_reward": 0.9736,
-    "full_pass_runs": "1/6",
-    "full_pass_rate_pct": 16.7,
-    "full_pass_rate_after_artifact_fix_upper_bound_pct": 33.3
-  }
+  },
+  "difficulty_takeaway": "Removing internal sink inventories from policy docs and splitting Consent Withdrawal into separate SQLite stores (edc.db, part11_audit.db, cdisc_sdtm.db) plus signed monitoring logs pushed Codex down from 97.5% (v3) to 92.8% (33/36) across both v4 runs while Claude Haiku held at 96.1% (35/36) and Claude Sonnet hit 100% (2/6 full passes). Across all 12 runs on both clinical tasks (66 checks, 30 mutants), every model failure was 100% deterministic across Run 1 and Run 2, and auditing failing checks surfaced 4 subtle verifier couplings that were fixed cleanly. Pushing partial credit below 30% on late-2026 frontier agents requires scaling the same clinical contracts from ~3k-LOC single-host repositories to 30k+ LOC multi-container network services (Postgres, OpenSearch, MinIO, Redpanda) with asynchronous network lag."
 }

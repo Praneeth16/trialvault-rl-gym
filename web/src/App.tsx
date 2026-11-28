@@ -5,12 +5,16 @@ import { SimulatorView } from './components/SimulatorView';
 import { CalibrationView } from './components/CalibrationView';
 import { MutantsView } from './components/MutantsView';
 
-const repoData = rawData as GeneratedRepoData;
+const repoData = rawData as unknown as GeneratedRepoData;
 
 type WorkbenchTab = 'simulator' | 'calibration' | 'mutants';
 
 export function App() {
   const [tab, setTab] = useState<WorkbenchTab>('simulator');
+  const [taskSlug, setTaskSlug] = useState<string>(repoData.tasks[0]?.slug ?? '');
+
+  const totalChecks = repoData.tasks.reduce((s, t) => s + t.stats.checksCount, 0);
+  const totalMutants = repoData.tasks.reduce((s, t) => s + t.stats.mutantsCount, 0);
 
   return (
     <>
@@ -22,7 +26,7 @@ export function App() {
             target="_blank"
             rel="noreferrer"
           >
-            <span className="brand-mark">TrialVault Workbench</span>
+            <span className="brand-mark">TrialVault RL Gym</span>
             <span className="brand-sub">Harbor v1.4 and RewardKit</span>
           </a>
 
@@ -81,32 +85,32 @@ export function App() {
         <div className="page-header">
           <div>
             <h1 className="page-title">
-              {tab === 'simulator' && 'Clinical consent withdrawal under HIPAA and 21 CFR Part 11'}
-              {tab === 'calibration' && `RewardKit ${repoData.summary.verifier_spec.checks_count}-check verifier and live model calibration`}
-              {tab === 'mutants' && 'Planted bug mutants proving black-box verifier coverage'}
+              {tab === 'simulator' && 'Clinical trial compliance environments under HIPAA, 21 CFR Part 11 & 312.32'}
+              {tab === 'calibration' && `Multi-task RewardKit verifier (${totalChecks} checks) & live model calibration`}
+              {tab === 'mutants' && `Planted bug mutants (${totalMutants}/${totalMutants} killed across 2 tasks)`}
             </h1>
             <p className="page-desc">
               {tab === 'simulator' &&
-                'Step through participant withdrawal, asynchronous worker convergence, delayed ePRO suppression, FDA pre-withdrawal lab ingestion, and OS-level fault recovery.'}
+                'Interactive replica of participant withdrawal, asynchronous worker convergence, delayed ePRO suppression, FDA pre-withdrawal lab ingestion, and OS-level fault recovery.'}
               {tab === 'calibration' &&
-                'All runs executed inside isolated starter sandboxes without access to tests or reference solutions, scored across three fresh randomized-seed trials.'}
+                'All runs executed inside isolated starter sandboxes without access to tests or reference solutions, graded across three fresh randomized-seed trials per task.'}
               {tab === 'mutants' &&
-                'Each single-bug patch mutates Reference Solution 1 and is verified in CI to drop the targeted RewardKit check to 0.0.'}
+                'Each single-bug unified diff mutates Reference Solution 1 and is verified in CI to drop targeted RewardKit checks to 0.0.'}
             </p>
           </div>
 
           <div className="header-metrics" aria-label="Verifier contract metrics">
             <div className="metric-pair">
               <span className="metric-value">
-                {repoData.summary.verifier_spec.checks_count} checks
+                {repoData.tasks.length} tasks · {totalChecks} checks
               </span>
               <span className="metric-label">
-                {repoData.summary.verifier_spec.criteria_count} weighted criteria
+                {repoData.summary.verifier_spec.total_criteria_count} weighted criteria
               </span>
             </div>
             <div className="metric-pair">
               <span className="metric-value state-pass">
-                {repoData.summary.boundary_and_mutant_proofs.mutants_killed}
+                {totalMutants}/{totalMutants}
               </span>
               <span className="metric-label">Mutants killed</span>
             </div>
@@ -118,16 +122,28 @@ export function App() {
         </div>
 
         {tab === 'simulator' && <SimulatorView />}
-        {tab === 'calibration' && <CalibrationView data={repoData} />}
-        {tab === 'mutants' && <MutantsView data={repoData} />}
+        {tab === 'calibration' && (
+          <CalibrationView
+            data={repoData}
+            selectedSlug={taskSlug}
+            onSelectTask={setTaskSlug}
+          />
+        )}
+        {tab === 'mutants' && (
+          <MutantsView
+            data={repoData}
+            selectedSlug={taskSlug}
+            onSelectTask={setTaskSlug}
+          />
+        )}
       </main>
 
       <footer className="site-footer">
         <span>
-          Task package: <span className="mono">{repoData.summary.task}</span>
+          Gym packages: <span className="mono">{repoData.tasks.map((t) => t.slug).join(' · ')}</span>
         </span>
         <span>
-          Separate no-network verifier · Harbor {repoData.summary.verifier_spec.harbor_version} ·{' '}
+          Separate no-network verifiers · Harbor {repoData.summary.verifier_spec.harbor_version} ·{' '}
           {repoData.summary.verifier_spec.framework}
         </span>
       </footer>

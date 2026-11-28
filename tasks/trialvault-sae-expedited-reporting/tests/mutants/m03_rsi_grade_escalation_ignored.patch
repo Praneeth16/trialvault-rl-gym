@@ -1,0 +1,11 @@
+--- a/trialvault_pv/pv_outbox.py
++++ b/trialvault_pv/pv_outbox.py
+@@ -214,7 +214,7 @@
+         ).fetchone()
+     if term is None:
+         return True
+-    if ctcae_grade > int(term["max_expected_grade"]):
++    if False and ctcae_grade > int(term["max_expected_grade"]):
+         return True
+     if (seriousness["death"] or seriousness["life_threatening"]) and int(term["fatal_expected"]) == 0:
+         return True

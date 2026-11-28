@@ -1,15 +1,21 @@
 # TrialVault Clinical Trial EDC
 
-TrialVault is a multi-site Phase III Clinical Trial Electronic Data Capture (EDC) platform built with FastAPI and file-backed stores under `TRIALVAULT_DATA_DIR`.
+TrialVault is a multi-site Phase III Clinical Trial Electronic Data Capture (EDC) backend built with FastAPI.
 
-## Components
+## Running Locally
 
-- `trialvault/api.py` — HTTP API for site enrollment, visits, adverse events, monitor queries, ePRO reminders, DSMB snapshots, central-lab webhooks, and safety summaries
-- `trialvault/worker.py` — Background worker processing outbox events and due scheduled jobs (`python -m trialvault.worker --once`)
-- `trialvault/audit.py` — FDA 21 CFR Part 11 SHA-256 hash-chained audit trail
-- `trialvault/queries.py` — Clinical monitor data queries and MedDRA medical coding queue
-- `trialvault/exports.py` — DSMB interim safety snapshot generator with SHA-256 manifest checksums
-- `trialvault/search.py`, `trialvault/cache.py`, `trialvault/blobs.py`, `trialvault/spool.py` — Coordinator search, projection cache, document store, and notification spool
+```bash
+# Run HTTP API
+uvicorn trialvault.api:app --host 127.0.0.1 --port 8000
+
+# Drain asynchronous outbox & due scheduled work once
+python -m trialvault.worker --once
+
+# Run baseline tests
+pytest -v tests/test_baseline_edc.py
+```
+
+Store locations default to `/app/data` and can be overridden with `TRIALVAULT_DATA_DIR`.
 
 ## Specifications
 

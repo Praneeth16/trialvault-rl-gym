@@ -7,7 +7,7 @@ on:
 
 jobs:
   lint-and-mutants:
-    name: Ruff, Harbor Lint, Boundary Scores & 15-Mutant Kill Suite
+    name: Ruff, Harbor Lint, Boundary Scores & 30-Mutant Kill Suite (2 Tasks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,14 +18,18 @@ jobs:
         run: uv sync --python 3.12 --no-install-project
       - name: Ruff lint
         run: uv run --python 3.12 ruff check .
-      - name: Starter baseline EDC tests
+      - name: Starter baseline EDC & PV tests
         run: |
           PYTHONPATH=tasks/trialvault-consent-withdrawal/environment/workspace \
             uv run --python 3.12 pytest -v tasks/trialvault-consent-withdrawal/environment/workspace/tests/test_baseline_edc.py
-      - name: Verifier boundary & 15-mutant kill suite
+          PYTHONPATH=tasks/trialvault-sae-expedited-reporting/environment/workspace \
+            uv run --python 3.12 pytest -v tasks/trialvault-sae-expedited-reporting/environment/workspace/tests/test_baseline_pv.py
+      - name: Verifier boundary & 30-mutant kill suite (18 consent + 12 SAE)
         run: uv run --python 3.12 pytest -v
-      - name: Harbor static lint (with root-agent rule)
-        run: uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-consent-withdrawal
+      - name: Harbor static lint (with root-agent rule) on all tasks
+        run: |
+          uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-consent-withdrawal
+          uvx --python 3.12 harbor lint --extend-select root-agent tasks/trialvault-sae-expedited-reporting
 
   web-build:
     name: Workbench UI Type-Check & Build
@@ -40,9 +44,15 @@ jobs:
         run: npm install --no-audit --no-fund && npm run build
 
   harbor-docker-oracle:
-    name: Dockerized Harbor Separate-Verifier Oracle (nop=0.0, sol1=1.0, sol2=1.0)
+    name: Dockerized Harbor Separate-Verifier Oracle (${{ matrix.task }})
     runs-on: ubuntu-latest
     needs: lint-and-mutants
+    strategy:
+      fail-fast: false
+      matrix:
+        task:
+          - trialvault-consent-withdrawal
+          - trialvault-sae-expedited-reporting
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -53,7 +63,7 @@ jobs:
       - name: Harbor NOP agent (must score 0.0)
         run: |
           uvx --python 3.12 harbor run \
-            -p tasks/trialvault-consent-withdrawal \
+            -p tasks/${{ matrix.task }} \
             -a nop \
             --jobs-dir jobs/nop
           python3 -c '
@@ -67,7 +77,7 @@ jobs:
       - name: Harbor Oracle SOLUTION=1 (must score 1.0)
         run: |
           uvx --python 3.12 harbor run \
-            -p tasks/trialvault-consent-withdrawal \
+            -p tasks/${{ matrix.task }} \
             -a oracle \
             --ae SOLUTION=1 \
             --jobs-dir jobs/sol1
@@ -82,7 +92,7 @@ jobs:
       - name: Harbor Oracle SOLUTION=2 (must score 1.0)
         run: |
           uvx --python 3.12 harbor run \
-            -p tasks/trialvault-consent-withdrawal \
+            -p tasks/${{ matrix.task }} \
             -a oracle \
             --ae SOLUTION=2 \
             --jobs-dir jobs/sol2

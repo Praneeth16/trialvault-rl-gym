@@ -27,7 +27,10 @@ select = ["E", "F", "I", "W"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["trialvault"]
+known-first-party = ["trialvault", "trialvault_pv"]
 
 [tool.pytest.ini_options]
-testpaths = ["tasks/trialvault-consent-withdrawal/tests/unit"]
+testpaths = [
+    "tasks/trialvault-consent-withdrawal/tests/unit",
+    "tasks/trialvault-sae-expedited-reporting/tests/unit",
+]

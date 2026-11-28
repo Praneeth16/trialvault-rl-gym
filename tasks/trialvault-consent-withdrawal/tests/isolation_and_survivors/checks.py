@@ -1,4 +1,4 @@
-"""Criterion 7: Multi-Site Isolation, Regulatory Hold & Survivors (10.0% total weight, 4 checks)."""
+"""Criterion 7: Multi-Site Isolation, Regulatory Hold, Shared Artifacts & Survivors (10.0% weight, 5 checks)."""
 
 from rewardkit import criteria
 
@@ -17,4 +17,9 @@ criteria.trialvault_check(
 )
 criteria.trialvault_check(
     "shared_shipment_manifest_scoped", name="shared_shipment_manifest_scoped", weight=3.0
+)
+criteria.trialvault_check(
+    "site_monitoring_logs_and_sdv_scoped",
+    name="site_monitoring_logs_and_sdv_scoped",
+    weight=3.5,
 )
